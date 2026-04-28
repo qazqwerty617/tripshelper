@@ -4,8 +4,9 @@ import logging
 import json
 import re
 import difflib
+import random
 from openai import AsyncOpenAI
-from config import OPENROUTER_API_KEY, GROQ_API_KEY
+from config import OPENROUTER_API_KEY, GROQ_API_KEY, GROQ_API_KEYS
 from excel_parser import get_hotel_db, get_tourist_tax_db, get_tax_per_person_per_night
 
 logger = logging.getLogger(__name__)
@@ -627,28 +628,39 @@ async def format_tour_message(user_text: str, do_cleanup: bool = False) -> str:
     return "❌ Помилка генерації тексту."
 
 async def transcribe_voice(file_bytes: bytes) -> str:
-    if not GROQ_API_KEY: return "❌ Немає GROQ_API_KEY."
-    
-    # 1. TRY GROQ (Free/Fast)
-    url_groq = "https://api.groq.com/openai/v1/audio/transcriptions"
-    headers_groq = {"Authorization": f"Bearer {GROQ_API_KEY}"}
-    whisper_prompt = "Турагент диктує підбірку готелів: Тенерифе, Майорка, Коста-Брава, Халкідікі, готель, зірки, харчування, сніданки, вечері, все включено, ціна в євро, виліт з міста."
-    
-    files = {"file": ("voice.ogg", file_bytes, "audio/ogg")}
-    data = {
-        "model": "whisper-large-v3",
-        "prompt": whisper_prompt,
-        "language": "uk"
-    }
-    
-    async with httpx.AsyncClient() as c:
-        try:
-            resp = await c.post(url_groq, headers=headers_groq, files=files, data=data, timeout=20)
-            if resp.status_code == 200:
-                text = resp.json().get("text", "")
-                if text: return text
-        except Exception as e:
-            logger.warning(f"Groq Whisper failed, trying fallback: {e}")
+    # 1. TRY GROQ (Free/Fast) with rotation
+    active_keys = GROQ_API_KEYS if GROQ_API_KEYS else ([GROQ_API_KEY] if GROQ_API_KEY else [])
+    if not active_keys:
+        logger.warning("No Groq API keys available.")
+    else:
+        # Shuffle keys to distribute load
+        shuffled_keys = active_keys.copy()
+        random.shuffle(shuffled_keys)
+        
+        for key in shuffled_keys:
+            url_groq = "https://api.groq.com/openai/v1/audio/transcriptions"
+            headers_groq = {"Authorization": f"Bearer {key}"}
+            whisper_prompt = "Турагент диктує підбірку готелів: Тенерифе, Майорка, Коста-Брава, Халкідікі, готель, зірки, харчування, сніданки, вечері, все включено, ціна в євро, виліт з міста."
+            
+            files = {"file": ("voice.ogg", file_bytes, "audio/ogg")}
+            data = {
+                "model": "whisper-large-v3",
+                "prompt": whisper_prompt,
+                "language": "uk"
+            }
+            
+            async with httpx.AsyncClient() as c:
+                try:
+                    resp = await c.post(url_groq, headers=headers_groq, files=files, data=data, timeout=20)
+                    if resp.status_code == 200:
+                        text = resp.json().get("text", "")
+                        if text: return text
+                    elif resp.status_code == 429:
+                        logger.warning(f"Groq Rate Limit hit for key {key[:10]}..., trying next key")
+                        continue
+                except Exception as e:
+                    logger.warning(f"Groq key {key[:10]}... failed: {e}")
+                    continue
 
     # 2. FALLBACK TO OPENROUTER (Paid/Stable)
     if OPENROUTER_API_KEY:
