@@ -698,19 +698,16 @@ async def format_tour_message(user_text: str) -> str:
     
     price_text = user_text + hotel_count_hint
 
-    extracted_hotels, price_data = await asyncio.gather(
+    # Run hotel extraction, price extraction, AND chunk extraction ALL IN PARALLEL
+    extracted_hotels, price_data, chunk_hotels = await asyncio.gather(
         _do_extract_hotels(),
         extract_prices_from_text(price_text, fast_models),
+        _extract_hotels_by_chunks(user_text, candidate_hotels, fast_models),
     )
-    logger.info(f"Extracted hotels: {len(extracted_hotels)}, price data: {price_data}")
-
-    expected_hotels = len(price_data.get("hotel_prices", [])) if price_data else 0
-    # Always run chunk extraction and merge — guarantees we don't miss any hotel
-    models_to_try = fast_models
-    chunk_hotels = await _extract_hotels_by_chunks(user_text, candidate_hotels, models_to_try)
     extracted_hotels = _dedupe_keep_order(extracted_hotels + chunk_hotels)
-    logger.info(f"After chunk merge: {len(extracted_hotels)} hotels (expected {expected_hotels}")
-        
+    expected_hotels = len(price_data.get("hotel_prices", [])) if price_data else 0
+    logger.info(f"After merge: {len(extracted_hotels)} hotels (expected {expected_hotels})")
+
     matched_info = []
     hotel_link_map = {}  # hotel_name -> link for post-processing
     all_hotels = [hotel for hotels in db.values() for hotel in hotels]
