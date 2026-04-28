@@ -564,9 +564,16 @@ async def format_tour_message(user_text: str, do_cleanup: bool = False) -> str:
         hotel_prices = hotel_prices[:max_items]
         
         for idx, hotel_total in enumerate(hotel_prices):
-            stars = int(hotel_stars_list[idx]) if idx < len(hotel_stars_list) else 0
+            # PRIORITY: Take stars from DB if available, otherwise fallback to price_data
+            db_stars_str = _extract_allowed_stars(matched_hotels[idx]['hotel']) if idx < len(matched_hotels) else ""
+            if db_stars_str:
+                stars = int(re.search(r'\d', db_stars_str).group())
+            else:
+                stars = int(hotel_stars_list[idx]) if idx < len(hotel_stars_list) else 0
+            
             tax = get_tax_per_person_per_night(selected_dest or "", stars, month, total_people) * nights
             cost = (hotel_total / total_people) + flight + other + tax
+            logger.info(f"Hotel {idx+1}: stars={stars}, tax={tax}, cost={cost}")
             final = round(cost + 150) + 5 if cost < 350 else round(cost * 1.43) + 5
             computed_prices.append(round(final * total_people) if has_children else final)
         
