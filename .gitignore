@@ -1,7 +1,14 @@
-.env
+venv/
 .venv/
+bot.log
+*.log
 __pycache__/
 *.pyc
+.env
+.vscode/
+.idea/
+*.xlsx
+!hotels_*.xlsx
 .DS_Store
 data/
 keys.txt
