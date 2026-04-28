@@ -1,0 +1,12 @@
+.env
+.venv/
+__pycache__/
+*.pyc
+.DS_Store
+data/
+keys.txt
+res.txt
+scratch.txt
+search_results.txt
+output.txt
+all_hotels.txt
