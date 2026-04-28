@@ -88,13 +88,9 @@ async def handle_voice(message: Message):
         await msg.edit_text("🤷 Не вдалося розпізнати текст.")
         return
 
-    cleaned_text = await llm_service.cleanup_transcribed_text(text)
-    if cleaned_text and not cleaned_text.startswith("❌"):
-        text = cleaned_text
-        
-    await msg.edit_text(f"🗣 <i>«{text}»</i>\n\n✨ Формую підбірку...", parse_mode="HTML")
+    await msg.edit_text("🎙 Розпізнано. ✨ Формую підбірку...", parse_mode="HTML")
     try:
-        result = await llm_service.format_tour_message(text)
+        result = await llm_service.format_tour_message(text, do_cleanup=True)
     except Exception as e:
         logger.error(f"format_tour_message voice error: {e}")
         await message.answer("❌ Внутрішня помилка під час генерації. Спробуй ще раз.")

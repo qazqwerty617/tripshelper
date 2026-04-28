@@ -40,8 +40,9 @@ def deploy():
         
         project_path = "/root/TripsHelper"
             
-        # 1. Pull changes
-        run_remote_command(ssh, f"cd {project_path} && git pull origin main")
+        # 1. Pull changes (force server to match GitHub)
+        print("Updating code from GitHub...")
+        run_remote_command(ssh, f"cd {project_path} && git fetch origin main && git reset --hard origin/main")
         
         # 2. Setup venv only if missing
         print("Checking venv...")
