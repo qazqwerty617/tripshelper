@@ -288,46 +288,61 @@ def _dedupe_keep_order(items: list[str]) -> list[str]:
     return result
 
 
+async def _extract_single_chunk(user_text: str, chunk: list, models: list[str], start: int) -> list[str]:
+    """Extract hotel matches from a single chunk of candidates."""
+    hotel_names = "\n".join(h["hotel"] for h in chunk)
+    prompt_user = (
+        f"ТЕКСТ МЕНЕДЖЕРА:\n{user_text}\n\n"
+        f"МОЖЛИВІ ГОТЕЛІ З БАЗИ:\n{hotel_names}"
+    )
+    for model in models:
+        try:
+            resp = await client.chat.completions.create(
+                model=model,
+                messages=[
+                    {"role": "system", "content": _EXTRACT_FROM_CHUNK_PROMPT},
+                    {"role": "user", "content": prompt_user},
+                ],
+                temperature=0.0,
+                timeout=30,
+            )
+            raw = resp.choices[0].message.content.strip()
+            raw = re.sub(r'```[a-z]*\n?', '', raw).strip('`').strip()
+            m = re.search(r'\{.*\}', raw, re.DOTALL)
+            if m:
+                data = json.loads(m.group())
+                chunk_found = data.get("hotels", [])
+                if chunk_found:
+                    logger.info(f"Chunk [{start}:{start+len(chunk)}] found: {chunk_found}")
+                return chunk_found  # return even if empty — we tried all models
+        except Exception as e:
+            logger.error(f"Chunk extraction error with {model} [{start}:{start+len(chunk)}]: {e}")
+    return []
+
+
 async def _extract_hotels_by_chunks(user_text: str, candidate_hotels: list, models: list[str]) -> list[str]:
     """
-    For large destinations, query the model on smaller hotel chunks and merge matches.
-    This is slower, but much more reliable than one huge extraction call.
+    For large destinations, query all chunks IN PARALLEL and merge results.
+    This is much faster than sequential chunk extraction.
     """
     if not candidate_hotels:
         return []
 
-    found = []
     chunk_size = 35
-    for start in range(0, len(candidate_hotels), chunk_size):
-        chunk = candidate_hotels[start:start + chunk_size]
-        hotel_names = "\n".join(h["hotel"] for h in chunk)
-        prompt_user = (
-            f"ТЕКСТ МЕНЕДЖЕРА:\n{user_text}\n\n"
-            f"МОЖЛИВІ ГОТЕЛІ З БАЗИ:\n{hotel_names}"
-        )
-        for model in models:
-            try:
-                resp = await client.chat.completions.create(
-                    model=model,
-                    messages=[
-                        {"role": "system", "content": _EXTRACT_FROM_CHUNK_PROMPT},
-                        {"role": "user", "content": prompt_user},
-                    ],
-                    temperature=0.0,
-                    timeout=30,
-                )
-                raw = resp.choices[0].message.content.strip()
-                raw = re.sub(r'```[a-z]*\n?', '', raw).strip('`').strip()
-                m = re.search(r'\{.*\}', raw, re.DOTALL)
-                if m:
-                    data = json.loads(m.group())
-                    chunk_found = data.get("hotels", [])
-                    if chunk_found:
-                        logger.info(f"Chunk [{start}:{start+chunk_size}] found: {chunk_found}")
-                        found.extend(chunk_found)
-                    break
-            except Exception as e:
-                logger.error(f"Chunk extraction error with {model}: {e}")
+    chunks = [
+        candidate_hotels[start:start + chunk_size]
+        for start in range(0, len(candidate_hotels), chunk_size)
+    ]
+
+    # Run all chunks in parallel
+    results = await asyncio.gather(*[
+        _extract_single_chunk(user_text, chunk, models, i * chunk_size)
+        for i, chunk in enumerate(chunks)
+    ])
+
+    found = []
+    for chunk_result in results:
+        found.extend(chunk_result)
     return _dedupe_keep_order(found)
 
 
