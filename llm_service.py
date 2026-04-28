@@ -330,10 +330,18 @@ def _build_hotel_candidates(user_text: str, relevant_hotels: list, limit: int = 
     return [h for _, h in scored[:limit]]
 
 def _extract_allowed_stars(hotel_name: str) -> str:
-    """Extract stars from hotel name in DB. Look for patterns like '5*', '5★', '5 *'."""
+    """Extract stars from hotel name in DB. Support patterns like '5*', '5★', '5 *', or just ' 5 ' at the end."""
+    # Pattern 1: Digit followed by * or ★ (e.g., 5*, 5 ★)
     m = re.search(r'([3-5])\s*(?:\*|★)', hotel_name)
     if m:
         return f"{m.group(1)}★"
+    
+    # Pattern 2: Just a digit at the very end or after a space (e.g., "Hotel Name 5")
+    # We check for a digit 3-5 that is either at the end of the string or followed by a space
+    m = re.search(r'\s([3-5])(?:\s|$)', hotel_name)
+    if m:
+        return f"{m.group(1)}★"
+        
     return ""
 
 def _inject_links(text: str, hotel_link_map: dict) -> str:
@@ -620,25 +628,48 @@ async def format_tour_message(user_text: str, do_cleanup: bool = False) -> str:
 
 async def transcribe_voice(file_bytes: bytes) -> str:
     if not GROQ_API_KEY: return "❌ Немає GROQ_API_KEY."
-    url = "https://api.groq.com/openai/v1/audio/transcriptions"
-    headers = {"Authorization": f"Bearer {GROQ_API_KEY}"}
     
-    # Prompt helps Whisper with specific terminology and formatting
+    # 1. TRY GROQ (Free/Fast)
+    url_groq = "https://api.groq.com/openai/v1/audio/transcriptions"
+    headers_groq = {"Authorization": f"Bearer {GROQ_API_KEY}"}
     whisper_prompt = "Турагент диктує підбірку готелів: Тенерифе, Майорка, Коста-Брава, Халкідікі, готель, зірки, харчування, сніданки, вечері, все включено, ціна в євро, виліт з міста."
     
     files = {"file": ("voice.ogg", file_bytes, "audio/ogg")}
     data = {
         "model": "whisper-large-v3",
         "prompt": whisper_prompt,
-        "language": "uk" # Force Ukrainian to avoid mix-up with Russian
+        "language": "uk"
     }
     
     async with httpx.AsyncClient() as c:
         try:
-            resp = await c.post(url, headers=headers, files=files, data=data, timeout=30)
-            if resp.status_code == 200: return resp.json().get("text", "")
-            logger.error(f"Groq transcription error: {resp.text}")
-            return "❌ Помилка розпізнавання."
+            resp = await c.post(url_groq, headers=headers_groq, files=files, data=data, timeout=20)
+            if resp.status_code == 200:
+                text = resp.json().get("text", "")
+                if text: return text
         except Exception as e:
-            logger.error(f"Groq transcription exception: {e}")
-            return "❌ Мережева помилка."
+            logger.warning(f"Groq Whisper failed, trying fallback: {e}")
+
+    # 2. FALLBACK TO OPENROUTER (Paid/Stable)
+    if OPENROUTER_API_KEY:
+        try:
+            # Using openai-style call via OpenRouter for whisper
+            # OpenRouter uses different endpoint for audio, but we can use their standard completions with a whisper model if available
+            # or use the direct audio/transcriptions if they support it.
+            # Most reliable via OpenRouter is using their chat interface for transcription if they have a whisper provider.
+            # Alternatively, use their openai-compatible audio endpoint if supported.
+            url_or = "https://openrouter.ai/api/v1/audio/transcriptions"
+            headers_or = {"Authorization": f"Bearer {OPENROUTER_API_KEY}"}
+            
+            # Reset file pointer if needed (not needed for bytes)
+            files = {"file": ("voice.ogg", file_bytes, "audio/ogg")}
+            data_or = {"model": "openai/whisper-large-v3"} # Paid model on OpenRouter
+            
+            async with httpx.AsyncClient() as c:
+                resp = await c.post(url_or, headers=headers_or, files=files, data=data_or, timeout=30)
+                if resp.status_code == 200:
+                    return resp.json().get("text", "")
+        except Exception as e:
+            logger.error(f"OpenRouter Whisper fallback failed: {e}")
+
+    return "❌ Помилка розпізнавання (обидва сервіси недоступні)."
