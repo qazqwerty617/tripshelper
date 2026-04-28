@@ -5,11 +5,22 @@ import json
 import re
 import difflib
 import random
+import itertools
 from openai import AsyncOpenAI
 from config import OPENROUTER_API_KEY, GROQ_API_KEY, GROQ_API_KEYS
 from excel_parser import get_hotel_db, get_tourist_tax_db, get_tax_per_person_per_night
 
 logger = logging.getLogger(__name__)
+
+# Round-robin generator for Groq keys
+def _create_key_rotator():
+    keys = GROQ_API_KEYS.copy()
+    if not keys and GROQ_API_KEY:
+        keys = [GROQ_API_KEY]
+    random.shuffle(keys) # Initial shuffle
+    return itertools.cycle(keys)
+
+_groq_key_rotator = _create_key_rotator()
 
 client = AsyncOpenAI(
     api_key=OPENROUTER_API_KEY,
@@ -628,16 +639,14 @@ async def format_tour_message(user_text: str, do_cleanup: bool = False) -> str:
     return "❌ Помилка генерації тексту."
 
 async def transcribe_voice(file_bytes: bytes) -> str:
-    # 1. TRY GROQ (Free/Fast) with rotation
+    # 1. TRY GROQ with smart rotation
     active_keys = GROQ_API_KEYS if GROQ_API_KEYS else ([GROQ_API_KEY] if GROQ_API_KEY else [])
     if not active_keys:
         logger.warning("No Groq API keys available.")
     else:
-        # Shuffle keys to distribute load
-        shuffled_keys = active_keys.copy()
-        random.shuffle(shuffled_keys)
-        
-        for key in shuffled_keys:
+        # Try all keys starting from the next one in the cycle
+        for _ in range(len(active_keys)):
+            key = next(_groq_key_rotator)
             url_groq = "https://api.groq.com/openai/v1/audio/transcriptions"
             headers_groq = {"Authorization": f"Bearer {key}"}
             whisper_prompt = "Турагент диктує підбірку готелів: Тенерифе, Майорка, Коста-Брава, Халкідікі, готель, зірки, харчування, сніданки, вечері, все включено, ціна в євро, виліт з міста."
@@ -655,11 +664,11 @@ async def transcribe_voice(file_bytes: bytes) -> str:
                     if resp.status_code == 200:
                         text = resp.json().get("text", "")
                         if text: return text
-                    elif resp.status_code == 429:
-                        logger.warning(f"Groq Rate Limit hit for key {key[:10]}..., trying next key")
-                        continue
+                    
+                    # If status is not 200, log and try next key
+                    logger.warning(f"Groq key {key[:10]}... returned status {resp.status_code}. Trying next key.")
                 except Exception as e:
-                    logger.warning(f"Groq key {key[:10]}... failed: {e}")
+                    logger.warning(f"Groq key {key[:10]}... failed: {e}. Trying next key.")
                     continue
 
     # 2. FALLBACK TO OPENROUTER (Paid/Stable)
