@@ -234,7 +234,9 @@ async def _extract_meals(user_text: str, fast_models: list) -> list:
 
 def fuzzy_match_hotel(hotel_name: str, db: list) -> dict:
     def normalize_name(name: str) -> str:
-        cleaned = re.sub(r'[^a-z0-9а-яіїєґ\s]', ' ', name.lower())
+        # Remove stars from name for better matching
+        cleaned = re.sub(r'[3-5]\s*(?:\*|★)', '', name.lower())
+        cleaned = re.sub(r'[^a-z0-9а-яіїєґ\s]', ' ', cleaned)
         cleaned = re.sub(r'\s+', ' ', cleaned).strip()
         tokens = [t for t in cleaned.split() if t not in _NOISE_TOKENS and len(t) > 1]
         return " ".join(tokens)
@@ -258,25 +260,26 @@ def fuzzy_match_hotel(hotel_name: str, db: list) -> dict:
         # 2. SequenceMatcher score
         score = difflib.SequenceMatcher(None, query, db_name).ratio()
         
-        # 3. Word overlap bonus
+        # 3. Word overlap bonus (very important for voice)
         query_words = set(re.findall(r'\w+', query))
         db_words = set(re.findall(r'\w+', db_name))
         
-        if query_words and query_words.issubset(db_words):
-            score += 0.45  # Big bonus if all query words are in DB name
-            
+        if not query_words: continue
+        
         overlap = len(query_words & db_words)
-        if overlap >= 2:
-            score += 0.2
-        elif overlap == 1:
-            score += 0.1
+        overlap_ratio = overlap / len(query_words)
+        
+        if overlap_ratio >= 0.8: # Almost all words match
+            score += 0.5
+        elif overlap_ratio >= 0.5:
+            score += 0.3
             
         if score > max_score:
             max_score = score
             best_match = h
             
-    if best_match and max_score >= 0.45:
-        if max_score < 0.8:
+    if best_match and max_score >= 0.4:
+        if max_score < 0.75:
             return {"hotel": best_match["hotel"], "link": best_match["link"] + " ⚠️"}
         return best_match
     return {"hotel": hotel_name, "link": "Посилання відсутнє ⚠️"}
@@ -301,11 +304,11 @@ def _build_hotel_candidates(user_text: str, relevant_hotels: list, limit: int = 
     return [h for _, h in scored[:limit]]
 
 def _extract_allowed_stars(hotel_name: str) -> str:
-    m = re.search(r'(?<!\d)([1-5])\s*(?:\*|★)?\s*$', hotel_name.strip())
-    if not m:
-        return ""
-    stars = int(m.group(1))
-    return f"{stars}★" if stars in (3, 4, 5) else ""
+    """Extract stars from hotel name in DB. Look for patterns like '5*', '5★', '5 *'."""
+    m = re.search(r'([3-5])\s*(?:\*|★)', hotel_name)
+    if m:
+        return f"{m.group(1)}★"
+    return ""
 
 def _inject_links(text: str, hotel_link_map: dict) -> str:
     lines = text.split('\n')
@@ -461,33 +464,33 @@ async def format_tour_message(user_text: str, do_cleanup: bool = False) -> str:
         
     selected_dest = await dest_task
     price_data = await price_task
-    broad_hotels = await broad_hotel_task
+    # broad_hotels = await broad_hotel_task # Skip broad task to rely more on targeted extraction
     extracted_meals = await meal_task
     
     logger.info(f"Step 1 parallel done in {asyncio.get_event_loop().time() - start_time:.2f}s. Dest: {selected_dest}")
 
     relevant_hotels = db.get(selected_dest, [])
     # Disable pre-filtering candidates to avoid missing hotels due to poor text matching
-    # candidate_hotels = _build_hotel_candidates(user_text, relevant_hotels, limit=140)
     candidate_hotels = relevant_hotels
     
     async def _do_targeted_extract():
-        db_names = "\n".join([h['hotel'] for h in candidate_hotels])
+        # Show ONLY first 300 hotels to avoid context overflow but keep it broad
+        db_names = "\n".join([h['hotel'] for h in candidate_hotels[:350]])
         extraction_content = f"ТЕКСТ ВІД МЕНЕДЖЕРА:\n{user_text}\n\nОБРАНИЙ НАПРЯМОК: {selected_dest}\n\nСПИСОК ГОТЕЛІВ НАПРЯМКУ (база):\n{db_names}"
-        for model in fast_models:
+        for model in ["google/gemini-2.5-flash"]: # Use only the most capable model for this
             try:
                 resp = await client.chat.completions.create(
                     model=model, messages=[{"role": "system", "content": _EXTRACT_PROMPT}, {"role": "user", "content": extraction_content}],
-                    temperature=0.0, timeout=25
+                    temperature=0.0, timeout=30
                 )
                 raw = resp.choices[0].message.content.strip()
                 m = re.search(r'\{.*\}', raw, re.DOTALL)
                 if m: return json.loads(m.group()).get("hotels", [])
-            except Exception: pass
+            except Exception as e:
+                logger.error(f"Targeted extract error: {e}")
         return []
 
-    targeted_hotels = await _do_targeted_extract()
-    extracted_hotels = _dedupe_keep_order(broad_hotels + targeted_hotels)
+    extracted_hotels = await _do_targeted_extract()
     
     # HARD LIMIT: If price_data tells us exactly how many hotels there should be, use it.
     if price_data and price_data.get("hotel_prices"):
