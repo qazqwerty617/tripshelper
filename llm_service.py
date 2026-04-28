@@ -593,19 +593,17 @@ async def format_tour_message(user_text: str, do_cleanup: bool = False) -> str:
             
             tax = get_tax_per_person_per_night(selected_dest or "", stars_val, month, total_people) * nights
             
-            # MATH LOGIC:
-            # 1. Base cost per person (Hotel + Flight + Other + Tax)
+            # MATH LOGIC (REVERTED TO ORIGINAL):
+            # 1. Base cost per person
             base_cost = (hotel_total / total_people) + flight + other + tax
             
             # 2. Markup (Margin)
-            # If cost is low (cheap tours), we add a fixed amount
-            # If cost is high, we use a percentage
-            if base_cost < 400:
-                final = base_cost + 130 # Fixed markup for cheap tours
+            if base_cost < 350:
+                final = base_cost + 150
             else:
-                final = base_cost * 1.35 # 35% markup for regular tours
+                final = base_cost * 1.43
                 
-            final = round(final) + 5 # Rounding to nearest 5 for beauty
+            final = round(final) + 5 # Rounding to nearest 5
             
             logger.info(f"Hotel {idx+1}: stars={stars_val}, tax={tax}, base={base_cost}, final={final}")
             computed_prices.append(round(final * total_people) if has_children else final)
