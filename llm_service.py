@@ -551,14 +551,14 @@ async def format_tour_message(user_text: str, do_cleanup: bool = False) -> str:
     price_label = "💰 загальна вартість туру за особу"
     computed_prices = []
     if price_data and price_data.get("hotel_prices") and price_data.get("flight_per_person") is not None:
-        total_people = int(price_data.get("adults", 2)) + int(price_data.get("children", 0))
-        has_children = int(price_data.get("children", 0)) > 0
-        flight = float(price_data.get("flight_per_person", 0))
-        other = float(price_data.get("other_per_person", 0))
-        hotel_prices = [float(p) for p in price_data.get("hotel_prices", [])]
-        nights = int(price_data.get("nights", 7))
-        month = int(price_data.get("check_in_month", 6))
-        hotel_stars_list = price_data.get("hotel_stars", [])
+        total_people = int(price_data.get("adults") or 2) + int(price_data.get("children") or 0)
+        has_children = int(price_data.get("children") or 0) > 0
+        flight = float(price_data.get("flight_per_person") or 0)
+        other = float(price_data.get("other_per_person") or 0)
+        hotel_prices = [float(p) for p in price_data.get("hotel_prices") or []]
+        nights = int(price_data.get("nights") or 7)
+        month = int(price_data.get("check_in_month") or 6)
+        hotel_stars_list = price_data.get("hotel_stars") or []
 
         max_items = len(matched_hotels) if matched_hotels else len(hotel_prices)
         hotel_prices = hotel_prices[:max_items]
