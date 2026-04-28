@@ -88,7 +88,7 @@ async def handle_voice(message: Message):
         await msg.edit_text("🤷 Не вдалося розпізнати текст.")
         return
 
-    await msg.edit_text("🎙 Розпізнано. ✨ Формую підбірку...", parse_mode="HTML")
+    await msg.edit_text("✨ Формую підбірку...", parse_mode="HTML")
     try:
         result = await llm_service.format_tour_message(text, do_cleanup=True)
     except Exception as e:
