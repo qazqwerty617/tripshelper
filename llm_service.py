@@ -254,7 +254,7 @@ async def cleanup_transcribed_text(raw_text: str) -> str:
     if not raw_text:
         return raw_text
 
-    models = ["openai/gpt-4o-mini", "google/gemini-2.5-flash"]
+    models = ["google/gemini-2.5-flash", "openai/gpt-4o-mini"]
     for model in models:
         try:
             resp = await client.chat.completions.create(
@@ -558,9 +558,11 @@ async def format_tour_message(user_text: str) -> str:
         "google/gemini-2.5-flash",
         "openai/gpt-4o-mini",
     ]
+    # deepseek-v3 is the best at following complex numbered-list instructions
+    # (key for "include ALL N hotels") — gemini-flash as reliable fallback
     smart_models = [
+        "deepseek/deepseek-v3",
         "google/gemini-2.5-flash",
-        "openai/gpt-4o-mini",
     ]
     
     try:
