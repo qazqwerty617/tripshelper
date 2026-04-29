@@ -529,8 +529,9 @@ async def format_tour_message(user_text: str, do_cleanup: bool = False) -> str:
     logger.info(f"Step 1 parallel done in {asyncio.get_event_loop().time() - start_time:.2f}s. Dest: {selected_dest}")
 
     # Enable smart candidate filtering for large databases (Crete, Mallorca, etc.)
-    # Increasing limit to 700 to cover all hotels even in the largest sheets
-    candidate_hotels = _build_hotel_candidates(user_text, relevant_hotels, limit=700)
+    # Reducing limit to 100 for better speed and less noise as requested.
+    # High-quality matches will always be in the top 100.
+    candidate_hotels = _build_hotel_candidates(user_text, relevant_hotels, limit=100)
     
     async def _do_targeted_extract():
         # Use the smart-filtered list
@@ -594,9 +595,25 @@ async def format_tour_message(user_text: str, do_cleanup: bool = False) -> str:
         total_people = adults + children
         has_children = (children + infants) > 0
         
-        flight = float(price_data.get("flight_per_person") or 0)
-        other = float(price_data.get("other_per_person") or 0)
-        hotel_prices = [float(p) for p in price_data.get("hotel_prices") or []]
+        flight = 0.0
+        try:
+            flight_raw = str(price_data.get("flight_per_person") or "0")
+            flight = float(re.sub(r'[^\d.]', '', flight_raw.replace(',', '.')) or 0)
+        except Exception: pass
+        
+        other = 0.0
+        try:
+            other_raw = str(price_data.get("other_per_person") or "0")
+            other = float(re.sub(r'[^\d.]', '', other_raw.replace(',', '.')) or 0)
+        except Exception: pass
+        
+        hotel_prices = []
+        for p in (price_data.get("hotel_prices") or []):
+            try:
+                p_clean = re.sub(r'[^\d.]', '', str(p).replace(',', '.'))
+                if p_clean: hotel_prices.append(float(p_clean))
+            except Exception: pass
+            
         nights = int(price_data.get("nights") or 7)
         month = int(price_data.get("check_in_month") or 6)
         hotel_stars_list = price_data.get("hotel_stars") or []
