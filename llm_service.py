@@ -528,15 +528,13 @@ async def format_tour_message(user_text: str, do_cleanup: bool = False) -> str:
     
     logger.info(f"Step 1 parallel done in {asyncio.get_event_loop().time() - start_time:.2f}s. Dest: {selected_dest}")
 
-    relevant_hotels = db.get(selected_dest, [])
-    # Disable pre-filtering candidates to avoid missing hotels due to poor text matching
-    candidate_hotels = relevant_hotels
+    # Enable smart candidate filtering for large databases (Crete, Mallorca, etc.)
+    candidate_hotels = _build_hotel_candidates(user_text, relevant_hotels, limit=350)
     
     async def _do_targeted_extract():
-        # Optimization: use a smaller, faster list for matching but enough to find the right ones
-        # We also ask the model to be faster by using a more concise prompt here
-        db_names = "\n".join([h['hotel'] for h in candidate_hotels[:300]])
-        extraction_content = f"ТЕКСТ:\n{user_text}\n\nНАПРЯМОК: {selected_dest}\n\nБАЗА:\n{db_names}"
+        # Use the smart-filtered list
+        db_names = "\n".join([h['hotel'] for h in candidate_hotels])
+        extraction_content = f"ТЕКСТ:\n{user_text}\n\nНАПРЯМОК: {selected_dest}\n\nБАЗА (топ збігів):\n{db_names}"
         
         # Use a faster model if possible, or stick to flash with lower max_tokens
         try:

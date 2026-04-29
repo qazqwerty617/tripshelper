@@ -134,6 +134,7 @@ _RESORT_ALIASES = {
     "міконос": "Міконос", "mykonos": "Міконос",
     "халкідік": "Халкідікі", "halkidiki": "Халкідікі",
     "закінтос": "Закінтос", "zakynthos": "Закінтос",
+    "тенериф": "Тенеріфе", "tenerife": "Тенеріфе",
 }
 
 
@@ -168,41 +169,56 @@ def get_tax_per_person_per_night(destination: str, stars: int, month: int, num_p
         resort_name = None
         for key, val in _RESORT_ALIASES.items():
             if key in dest_lower:
-                resort_name = val
+                resort_name = val.lower()
                 break
+        
+        # If no alias, use the destination itself as a fallback
         if not resort_name:
-            return 0.0
+            resort_name = destination.strip().lower()
 
         wb = openpyxl.load_workbook(EXCEL_PATH, read_only=True)
         for sheet_name in wb.sheetnames:
             if "ПОДАТОК" not in sheet_name.upper():
                 continue
             ws = wb[sheet_name]
-            for row in ws.iter_rows(min_row=1, max_row=60, values_only=True):
+            for row in ws.iter_rows(min_row=1, max_row=100, values_only=True): # Increased max_row
                 if not any(row):
                     continue
                 if len(row) < 11 or not row[3] or not row[4]:
                     continue
-                row_resort = str(row[3]).strip()
-                if row_resort.upper() in ("КУРОРТ", "ТАБЛИЦЯ", "СТАВКИ", "КУРОРТИ"):
+                
+                row_resort = str(row[3]).strip().lower()
+                if row_resort in ("курорт", "таблиця", "ставки", "курорти", "назва"):
                     continue
-                if row_resort != resort_name:
+                
+                # Flexible match: either exact or one contains the other
+                if resort_name not in row_resort and row_resort not in resort_name:
                     continue
+                
                 if not _month_in_period(str(row[4]), month):
                     continue
+                
                 unit = str(row[5]).strip().lower() if row[5] else ""
-                # Col: 0★→6, 1-2★→7, 3★→8, 4★→9, 5★→10
+                # Col mapping: 0★→6, 1-2★→7, 3★→8, 4★→9, 5★→10
                 col = {0: 6, 1: 7, 2: 7, 3: 8, 4: 9, 5: 10}.get(stars, 9)
                 rate_val = row[col] if len(row) > col else None
+                
                 try:
-                    rate = float(rate_val) if rate_val is not None else 0.0
+                    # Clean the rate value (sometimes it might have currency symbols or commas)
+                    if isinstance(rate_val, str):
+                        rate_val = rate_val.replace(',', '.').replace('€', '').strip()
+                    rate = float(rate_val) if rate_val is not None and str(rate_val).strip() != "" else 0.0
                 except (ValueError, TypeError):
                     rate = 0.0
+                
                 # If "за номер / ніч" — divide by people to get per-person rate
                 if "номер" in unit and num_people > 0:
                     rate = rate / num_people
-                logger.info(f"Tax lookup: {resort_name} {stars}★ month={month} → {rate}€/person/night ({unit})")
+                
+                logger.info(f"TAX FOUND: {row_resort} {stars}★ month={month} -> {rate}€/person/night")
                 return rate
+        
+        logger.info(f"TAX NOT FOUND for {destination} (resort={resort_name}), stars={stars}, month={month}")
         return 0.0
     except Exception as e:
         logger.error(f"Tax lookup error: {e}")
