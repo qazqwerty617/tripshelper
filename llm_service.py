@@ -536,6 +536,7 @@ async def format_tour_message(user_text: str, do_cleanup: bool = False) -> str:
     
     logger.info(f"Step 1 parallel done in {asyncio.get_event_loop().time() - start_time:.2f}s. Dest: {selected_dest}")
 
+    relevant_hotels = db.get(selected_dest, [])
     # Enable smart candidate filtering for large databases (Crete, Mallorca, etc.)
     # Reducing limit to 100 for better speed and less noise as requested.
     # High-quality matches will always be in the top 100.
