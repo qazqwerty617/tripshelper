@@ -22,6 +22,13 @@ def _create_key_rotator():
 
 _groq_key_rotator = _create_key_rotator()
 
+def _safe_int(val, default=0):
+    try:
+        if val is None: return default
+        s = re.sub(r'[^\d]', '', str(val))
+        return int(s) if s else default
+    except: return default
+
 client = AsyncOpenAI(
     api_key=OPENROUTER_API_KEY,
     base_url="https://openrouter.ai/api/v1",
@@ -590,9 +597,9 @@ async def format_tour_message(user_text: str, do_cleanup: bool = False) -> str:
     price_label = "💰 загальна вартість туру за особу"
     computed_prices = []
     if price_data and price_data.get("hotel_prices") and price_data.get("flight_per_person") is not None:
-        adults = int(price_data.get("adults") or 2)
-        children = int(price_data.get("children") or 0)
-        infants = int(price_data.get("infants") or 0)
+        adults = _safe_int(price_data.get("adults"), 2)
+        children = _safe_int(price_data.get("children"), 0)
+        infants = _safe_int(price_data.get("infants"), 0)
         total_people = adults + children
         has_children = (children + infants) > 0
         
@@ -615,8 +622,8 @@ async def format_tour_message(user_text: str, do_cleanup: bool = False) -> str:
                 if p_clean: hotel_prices.append(float(p_clean))
             except Exception: pass
             
-        nights = int(price_data.get("nights") or 7)
-        month = int(price_data.get("check_in_month") or 6)
+        nights = _safe_int(price_data.get("nights"), 7)
+        month = _safe_int(price_data.get("check_in_month"), 6)
         hotel_stars_list = price_data.get("hotel_stars") or []
 
         max_items = len(matched_hotels) if matched_hotels else len(hotel_prices)
