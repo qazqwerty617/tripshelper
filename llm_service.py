@@ -278,6 +278,7 @@ def fuzzy_match_hotel(hotel_name: str, db: list) -> dict:
     def normalize_name(name: str) -> str:
         # Remove stars from name for better matching
         cleaned = re.sub(r'[3-5]\s*(?:\*|★)', '', name.lower())
+        # Remove common separators
         cleaned = re.sub(r'[^a-z0-9а-яіїєґ\s]', ' ', cleaned)
         cleaned = re.sub(r'\s+', ' ', cleaned).strip()
         tokens = [t for t in cleaned.split() if t not in _NOISE_TOKENS]
@@ -289,45 +290,47 @@ def fuzzy_match_hotel(hotel_name: str, db: list) -> dict:
     if not query:
         query = hotel_name.lower()
     
+    query_words = set(re.findall(r'\w+', query))
+    
     for h in db:
         db_name_orig = h['hotel']
         db_name = normalize_name(db_name_orig)
         if not db_name:
             db_name = db_name_orig.lower()
             
-        # 1. Exact match (after normalization)
+        # 1. Exact match (CRITICAL: if manager wrote full name correctly)
         if query == db_name:
             return h
 
         # 2. SequenceMatcher score
         ratio = difflib.SequenceMatcher(None, query, db_name).ratio()
         
-        # 3. Word overlap bonus (very important for voice)
-        query_words = set(re.findall(r'\w+', query))
+        # 3. Word overlap bonus
         db_words = set(re.findall(r'\w+', db_name))
         
         if not query_words: continue
         
         overlap = len(query_words & db_words)
-        overlap_ratio = overlap / len(query_words)
+        overlap_ratio = overlap / len(query_words) if query_words else 0
 
-        # Итоговый скор
-        score = ratio * 0.4 + overlap_ratio * 0.6
+        # Weighted score: overlap is more important for identifying the right hotel
+        score = ratio * 0.3 + overlap_ratio * 0.7
         
-        # Штраф за большую разницу в длине (защита от слишком коротких совпадений)
+        # Penalty for length difference
         len_diff = abs(len(query) - len(db_name))
-        if len_diff > 15:
-            score -= 0.1
+        if len_diff > 20:
+            score -= 0.15
 
-        # Бонус за высокое совпадение слов
-        if overlap_ratio >= 0.8:
-            score += 0.5
+        # Strong bonus for high word overlap
+        if overlap_ratio >= 0.9:
+            score += 0.4
             
         if score > max_score:
             max_score = score
             best_match = h
             
-    if best_match and max_score > 0.65: # Порог срабатывания чуть выше
+    # Lowered threshold slightly for voice but added stricter word overlap requirements
+    if best_match and max_score > 0.6: 
         return best_match
     return {"hotel": hotel_name, "link": "Посилання відсутнє ⚠️"}
 
@@ -530,20 +533,25 @@ async def format_tour_message(user_text: str, do_cleanup: bool = False) -> str:
     candidate_hotels = relevant_hotels
     
     async def _do_targeted_extract():
-        # Show ONLY first 300 hotels to avoid context overflow but keep it broad
-        db_names = "\n".join([h['hotel'] for h in candidate_hotels[:350]])
-        extraction_content = f"ТЕКСТ ВІД МЕНЕДЖЕРА:\n{user_text}\n\nОБРАНИЙ НАПРЯМОК: {selected_dest}\n\nСПИСОК ГОТЕЛІВ НАПРЯМКУ (база):\n{db_names}"
-        for model in ["google/gemini-2.5-flash"]: # Use only the most capable model for this
-            try:
-                resp = await client.chat.completions.create(
-                    model=model, messages=[{"role": "system", "content": _EXTRACT_PROMPT}, {"role": "user", "content": extraction_content}],
-                    temperature=0.0, timeout=30
-                )
-                raw = resp.choices[0].message.content.strip()
-                m = re.search(r'\{.*\}', raw, re.DOTALL)
-                if m: return json.loads(m.group()).get("hotels", [])
-            except Exception as e:
-                logger.error(f"Targeted extract error: {e}")
+        # Optimization: use a smaller, faster list for matching but enough to find the right ones
+        # We also ask the model to be faster by using a more concise prompt here
+        db_names = "\n".join([h['hotel'] for h in candidate_hotels[:300]])
+        extraction_content = f"ТЕКСТ:\n{user_text}\n\nНАПРЯМОК: {selected_dest}\n\nБАЗА:\n{db_names}"
+        
+        # Use a faster model if possible, or stick to flash with lower max_tokens
+        try:
+            resp = await client.chat.completions.create(
+                model="google/gemini-2.5-flash", 
+                messages=[{"role": "system", "content": _EXTRACT_PROMPT}, {"role": "user", "content": extraction_content}],
+                temperature=0.0, 
+                timeout=25,
+                max_tokens=500 # Limit output length
+            )
+            raw = resp.choices[0].message.content.strip()
+            m = re.search(r'\{.*\}', raw, re.DOTALL)
+            if m: return json.loads(m.group()).get("hotels", [])
+        except Exception as e:
+            logger.error(f"Targeted extract error: {e}")
         return []
 
     extracted_hotels = await _do_targeted_extract()
@@ -661,9 +669,13 @@ async def format_tour_message(user_text: str, do_cleanup: bool = False) -> str:
     
     for model in smart_models:
         try:
+            # OPTIMIZATION: Reduce temperature to 0 and limit max_tokens for faster design generation
             resp = await client.chat.completions.create(
-                model=model, messages=[{"role": "system", "content": _FORMAT_PROMPT}, {"role": "user", "content": combined}],
-                temperature=0, timeout=120
+                model=model, 
+                messages=[{"role": "system", "content": _FORMAT_PROMPT}, {"role": "user", "content": combined}],
+                temperature=0, 
+                timeout=90,
+                max_tokens=2500 # Sufficient for a long message but prevents wandering
             )
             result = resp.choices[0].message.content.strip()
             result = re.sub(r'<math>.*?</math>', '', result, flags=re.DOTALL).strip()
