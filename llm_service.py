@@ -588,14 +588,18 @@ async def format_tour_message(user_text: str, do_cleanup: bool = False) -> str:
             # PRIORITY: Take stars from DB if available, otherwise fallback to price_data
             db_stars_str = _extract_allowed_stars(matched_hotels[idx]['hotel']) if idx < len(matched_hotels) else ""
             if db_stars_str:
-                stars_val = int(re.search(r'\d', db_stars_str).group())
+                m_stars = re.search(r'\d', db_stars_str)
+                stars_val = int(m_stars.group()) if m_stars else 0
             else:
                 stars_val = int(hotel_stars_list[idx]) if idx < len(hotel_stars_list) else 0
+            
+            tax_per_night = get_tax_per_person_per_night(selected_dest or "", stars_val, month, total_people)
+            tax = tax_per_night * nights
             
             # MATH LOGIC (STRICT):
             # 1. Base cost per person
             # hotel_total is TOTAL for the room. We divide by people.
-            hotel_per_person = hotel_total / total_people
+            hotel_per_person = hotel_total / total_people if total_people > 0 else hotel_total
             base_cost = hotel_per_person + flight + other + tax
             
             # 2. Markup (Margin)
@@ -637,19 +641,21 @@ async def format_tour_message(user_text: str, do_cleanup: bool = False) -> str:
     combined = f"ТЕКСТ ВІД МЕНЕДЖЕРА:\n{user_text}\n\nЗНАЙДЕНІ В БАЗІ ГОТЕЛІ (ВСЬОГО {len(matched_hotels)}, ВИКОРИСТОВУЙ ВСІ):\n{numbered_hotels_block}\n\nДЕТАЛЬНА ІНФОРМАЦІЯ:\n{db_text}{prices_block}{meals_block}"
     
     for model in smart_models:
-        try:
-            resp = await client.chat.completions.create(
-                model=model, messages=[{"role": "system", "content": _FORMAT_PROMPT}, {"role": "user", "content": combined}],
-                temperature=0, timeout=120
-            )
-            result = resp.choices[0].message.content.strip()
-            result = re.sub(r'<math>.*?</math>', '', result, flags=re.DOTALL).strip()
-            result = _inject_links(result, hotel_link_map)
-            result = _append_missing_hotels(result, matched_hotels, computed_prices)
-            result = _inject_prices(result, price_label, computed_prices)
-            return result
-        except Exception as e: logger.error(f"Format error with {model}: {e}")
-    return "❌ Помилка генерації тексту."
+            try:
+                resp = await client.chat.completions.create(
+                    model=model, messages=[{"role": "system", "content": _FORMAT_PROMPT}, {"role": "user", "content": combined}],
+                    temperature=0, timeout=120
+                )
+                result = resp.choices[0].message.content.strip()
+                result = re.sub(r'<math>.*?</math>', '', result, flags=re.DOTALL).strip()
+                result = _inject_links(result, hotel_link_map)
+                result = _append_missing_hotels(result, matched_hotels, computed_prices)
+                result = _inject_prices(result, price_label, computed_prices)
+                return result
+            except Exception as e:
+                logger.error(f"Format error with {model}: {e}", exc_info=True)
+                if model == smart_models[-1]: # Only return error if LAST model failed
+                    return "❌ Помилка генерації тексту."
 
 async def transcribe_voice(file_bytes: bytes) -> str:
     # 1. TRY GROQ with smart rotation
