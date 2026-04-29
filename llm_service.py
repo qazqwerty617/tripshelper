@@ -641,21 +641,21 @@ async def format_tour_message(user_text: str, do_cleanup: bool = False) -> str:
     combined = f"ТЕКСТ ВІД МЕНЕДЖЕРА:\n{user_text}\n\nЗНАЙДЕНІ В БАЗІ ГОТЕЛІ (ВСЬОГО {len(matched_hotels)}, ВИКОРИСТОВУЙ ВСІ):\n{numbered_hotels_block}\n\nДЕТАЛЬНА ІНФОРМАЦІЯ:\n{db_text}{prices_block}{meals_block}"
     
     for model in smart_models:
-            try:
-                resp = await client.chat.completions.create(
-                    model=model, messages=[{"role": "system", "content": _FORMAT_PROMPT}, {"role": "user", "content": combined}],
-                    temperature=0, timeout=120
-                )
-                result = resp.choices[0].message.content.strip()
-                result = re.sub(r'<math>.*?</math>', '', result, flags=re.DOTALL).strip()
-                result = _inject_links(result, hotel_link_map)
-                result = _append_missing_hotels(result, matched_hotels, computed_prices)
-                result = _inject_prices(result, price_label, computed_prices)
-                return result
-            except Exception as e:
-                logger.error(f"Format error with {model}: {e}", exc_info=True)
-                if model == smart_models[-1]: # Only return error if LAST model failed
-                    return "❌ Помилка генерації тексту."
+        try:
+            resp = await client.chat.completions.create(
+                model=model, messages=[{"role": "system", "content": _FORMAT_PROMPT}, {"role": "user", "content": combined}],
+                temperature=0, timeout=120
+            )
+            result = resp.choices[0].message.content.strip()
+            result = re.sub(r'<math>.*?</math>', '', result, flags=re.DOTALL).strip()
+            result = _inject_links(result, hotel_link_map)
+            result = _append_missing_hotels(result, matched_hotels, computed_prices)
+            result = _inject_prices(result, price_label, computed_prices)
+            return result
+        except Exception as e:
+            logger.error(f"Format error with {model}: {e}", exc_info=True)
+            if model == smart_models[-1]: # Only return error if LAST model failed
+                return "❌ Помилка генерації тексту."
 
 async def transcribe_voice(file_bytes: bytes) -> str:
     # 1. TRY GROQ with smart rotation
