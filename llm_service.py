@@ -529,7 +529,8 @@ async def format_tour_message(user_text: str, do_cleanup: bool = False) -> str:
     logger.info(f"Step 1 parallel done in {asyncio.get_event_loop().time() - start_time:.2f}s. Dest: {selected_dest}")
 
     # Enable smart candidate filtering for large databases (Crete, Mallorca, etc.)
-    candidate_hotels = _build_hotel_candidates(user_text, relevant_hotels, limit=350)
+    # Increasing limit to 700 to cover all hotels even in the largest sheets
+    candidate_hotels = _build_hotel_candidates(user_text, relevant_hotels, limit=700)
     
     async def _do_targeted_extract():
         # Use the smart-filtered list
@@ -542,8 +543,8 @@ async def format_tour_message(user_text: str, do_cleanup: bool = False) -> str:
                 model="google/gemini-2.5-flash", 
                 messages=[{"role": "system", "content": _EXTRACT_PROMPT}, {"role": "user", "content": extraction_content}],
                 temperature=0.0, 
-                timeout=25,
-                max_tokens=500 # Limit output length
+                timeout=35, # Increased timeout for larger context
+                max_tokens=800 # Increased slightly for more hotels
             )
             raw = resp.choices[0].message.content.strip()
             m = re.search(r'\{.*\}', raw, re.DOTALL)
