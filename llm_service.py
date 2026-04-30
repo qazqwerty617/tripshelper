@@ -253,13 +253,14 @@ def fuzzy_match_hotel(hotel_name: str, db: list) -> tuple[dict, float]:
         }
         
         # Replace common transcription errors and synonyms
+        # Note: BG -> BJ is removed from global to avoid confusion in text mode
         replacements = {
             "blucia": "bluesea", "blusia": "bluesea", "bluesee": "bluesea", "блю сі": "bluesea", "блюсі": "bluesea",
-            "бі джей": "bj", "бі джи": "bj", "би джей": "bj", "би джи": "bj", "біджей": "bj", "плеймар": "playamar",
+            "бі джей": "bj", "би джей": "bj", "біджей": "bj", "плеймар": "playamar",
             "playmar": "playamar", "blaucel": "bluesea", "багамас": "bahamas",
             "іберостар": "iberostar", "ріксос": "rixos", "мітсіс": "mitsis",
             "глікотель": "grecotel", "грекотель": "grecotel", "соль": "sol", "мелія": "melia",
-            "хсм": "hsm", "бг": "bj", "bg": "bj", "каста": "costa", "калла": "cala", "calla": "cala", "міллер": "millor",
+            "хсм": "hsm", "каста": "costa", "калла": "cala", "calla": "cala", "міллер": "millor",
             "miller": "millor", "медіадіа": "mediodia", "mediadia": "mediodia", "глобаліс": "globales",
             "globalis": "globales", "ізабель": "isabel", "азулін": "azuline", "гранд": "gran", "grand": "gran"
         }
@@ -286,7 +287,7 @@ def fuzzy_match_hotel(hotel_name: str, db: list) -> tuple[dict, float]:
         return " ".join(final_tokens)
 
     # Brands for strict matching
-    BRANDS = {"bluesea", "hipotels", "globales", "iberostar", "rixos", "mitsis", "grecotel", "sol", "melia", "hsm", "azuline", "bj"}
+    BRANDS = {"bluesea", "hipotels", "globales", "iberostar", "rixos", "mitsis", "grecotel", "sol", "melia", "hsm", "azuline", "bj", "bg"}
 
     best_match = None
     max_score = 0.0
@@ -303,9 +304,9 @@ def fuzzy_match_hotel(hotel_name: str, db: list) -> tuple[dict, float]:
         if not db_name:
             db_name = db_name_orig.lower()
             
-        # 1. Exact match
+        # 1. Exact match (after normalization)
         if query == db_name:
-            return h, 1.0
+            return h, 1.2 # Bonus for exact normalized match
 
         # 2. SequenceMatcher score
         ratio = difflib.SequenceMatcher(None, query, db_name).ratio()
@@ -315,39 +316,39 @@ def fuzzy_match_hotel(hotel_name: str, db: list) -> tuple[dict, float]:
         db_brands = db_words & BRANDS
         if not query_words: continue
         
-        overlap = len(query_words & db_words)
+        overlap_words = query_words & db_words
+        overlap = len(overlap_words)
         overlap_ratio = overlap / len(query_words) if query_words else 0
 
         # Weighted score: overlap is more important for identifying the right hotel
-        score = ratio * 0.2 + overlap_ratio * 0.8
+        score = ratio * 0.3 + overlap_ratio * 0.7
         
-        # BRAND PENALTY/BONUS
-        # If query has a brand, but match has a DIFFERENT brand, apply heavy penalty
-        if query_brands and db_brands and query_brands != db_brands:
-            score -= 1.0 # Increased penalty to prevent cross-brand matching (e.g. Bluesea -> Hipotels)
-        # If query has a brand, but match has NO brand, apply small penalty
-        elif query_brands and not db_brands:
-            score -= 0.3
-        # If both have the SAME brand, apply bonus
-        elif query_brands and db_brands and query_brands == db_brands:
-            score += 0.3
+        # BRAND PENALTY/BONUS - Very Strict
+        if query_brands and db_brands:
+            if query_brands != db_brands:
+                score -= 1.5 # Extreme penalty for different brands
+            else:
+                score += 0.3 # Bonus for same brand
+        
+        # UNIQUE WORD BONUS (e.g. "Playamar", "Java", "Isabel")
+        # Words that are NOT brands and NOT common noise
+        unique_query_words = query_words - BRANDS
+        unique_db_words = db_words - BRANDS
+        unique_overlap = len(unique_query_words & unique_db_words)
+        if unique_query_words:
+            unique_ratio = unique_overlap / len(unique_query_words)
+            score += unique_ratio * 0.5 # Big bonus for matching unique part of name
 
         # Penalty for large length difference
         len_diff = abs(len(query) - len(db_name))
-        if len_diff > 15: # Stricter length check
-            score -= 0.2
+        if len_diff > 12:
+            score -= 0.3
 
-        # Strong bonus for high word overlap
-        if overlap_ratio >= 0.85:
-            score += 0.5
-        elif overlap_ratio >= 0.7:
-            score += 0.2
-                
         if score > max_score:
             max_score = score
             best_match = h
             
-    if best_match and max_score > 0.60: # Lowered from 0.75 to 0.60 per user request for voice matching
+    if best_match and max_score > 0.65: 
         return best_match, max_score
         
     return {"hotel": hotel_name, "link": "Посилання відсутнє ⚠️"}, 0.0
@@ -663,10 +664,31 @@ async def format_tour_message(user_text: str, do_cleanup: bool = False, raw_voic
     logger.info(f"Step 1 parallel done in {asyncio.get_event_loop().time() - start_time:.2f}s. Dest: {selected_dest}")
 
     relevant_hotels = db.get(selected_dest, [])
+    
     # Enable smart candidate filtering for large databases (Crete, Mallorca, etc.)
     # High-quality matches will always be in the top 100.
     candidate_hotels = _build_hotel_candidates(hotel_search_text_cleaned, relevant_hotels, limit=60)
     
+    # --- NEW: STRICT DIRECT MATCHING PHASE ---
+    # Before asking LLM, let's see if we can find hotels directly by name overlap
+    # This prevents LLM from "re-interpreting" clear names like "BJ Playamar"
+    direct_matched_hotels = []
+    text_normalized = hotel_search_text_cleaned.lower()
+    
+    # Simple direct matching: if a hotel name from DB is clearly in the user text
+    for h in relevant_hotels:
+        h_name = h['hotel'].lower()
+        # Remove common noise for check
+        h_clean = re.sub(r'[^a-z0-9\s]', '', h_name)
+        h_words = h_clean.split()
+        # If all important words of a hotel are in the text in correct order
+        if len(h_words) >= 2: # Only for meaningful names
+            if h_clean in text_normalized:
+                direct_matched_hotels.append(h['hotel'])
+    
+    logger.info(f"Direct matching found: {direct_matched_hotels}")
+    # -----------------------------------------
+
     async def _do_targeted_extract(text_to_parse):
         # Use the smart-filtered list
         db_names = "\n".join([h['hotel'] for h in candidate_hotels])
@@ -676,6 +698,10 @@ async def format_tour_message(user_text: str, do_cleanup: bool = False, raw_voic
         # Add hint about expected count
         if expected_count > 0:
             extraction_content += f"\n\nВАЖЛИВО: Я очікую знайти РІВНО {expected_count} готелів."
+        
+        # If we found direct matches, tell LLM about them to reduce hallucinations
+        if direct_matched_hotels:
+            extraction_content += f"\n\nПІДКАЗКА: Деякі готелі, що точно є в тексті: {', '.join(direct_matched_hotels)}"
         
         raw = await _call_llm_with_retry(
             messages=[{"role": "system", "content": _EXTRACT_PROMPT}, {"role": "user", "content": extraction_content}],
