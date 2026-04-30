@@ -874,8 +874,11 @@ async def format_tour_message(user_text: str, do_cleanup: bool = False, raw_voic
                 context_text = context_match.group(1)
                 # Search for any hotel from DB in this specific context
                 for h in relevant_hotels:
-                    h_norm = normalize_name(h['hotel'])
-                    unique_words = set(re.findall(r'\w+', h_norm)) - BRANDS
+                    # We need to use a normalization that is available in this scope
+                    # fuzzy_match_hotel has a nested normalize_name, but we can't call it directly.
+                    # We'll use a simplified version or use fuzzy_match_hotel itself.
+                    h_name_clean = re.sub(r'[^a-z0-9\s]', ' ', h['hotel'].lower())
+                    unique_words = set(h_name_clean.split()) - BRANDS - _NOISE_TOKENS
                     if unique_words and all(word in context_text for word in unique_words):
                         recovered_hotels[i] = h['hotel']
                         break
