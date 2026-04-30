@@ -429,12 +429,22 @@ def _inject_prices(text: str, price_label: str, computed_prices: list) -> str:
     # 1. First, remove ANY line that starts with 💰 to prevent duplicates or old/wrong prices
     lines = [line for line in lines if not line.strip().startswith("💰")]
     
-    # 2. Find the anchor (online support) to insert the correct price line
+    # 2. Find the anchor to insert the correct price line.
+    # We want it AFTER "онлайн підтримка". If not found, then AFTER "путівник".
     anchor_idx = None
+    
+    # Try to find "онлайн підтримка" first
     for i, line in enumerate(lines):
-        if "онлайн підтримка" in line.lower() or "путівник" in line.lower():
+        if "онлайн підтримка" in line.lower():
             anchor_idx = i
             break
+            
+    # If not found, try "путівник"
+    if anchor_idx is None:
+        for i, line in enumerate(lines):
+            if "путівник" in line.lower():
+                anchor_idx = i
+                break
             
     if anchor_idx is not None:
         # Insert after the anchor
