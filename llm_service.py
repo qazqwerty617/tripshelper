@@ -678,18 +678,31 @@ async def format_tour_message(user_text: str, do_cleanup: bool = False, raw_voic
     # Before asking LLM, let's see if we can find hotels directly by name overlap
     # This prevents LLM from "re-interpreting" clear names like "BJ Playamar"
     direct_matched_hotels = []
-    text_normalized = hotel_search_text_cleaned.lower()
+    
+    # Pre-normalize the full user text for direct searching (remove noise, punctuation)
+    text_clean_for_search = re.sub(r'[^a-z0-9\s]', ' ', hotel_search_text_cleaned.lower())
+    text_clean_for_search = re.sub(r'\s+', ' ', text_clean_for_search).strip()
     
     # Simple direct matching: if a hotel name from DB is clearly in the user text
     for h in relevant_hotels:
         h_name = h['hotel'].lower()
-        # Remove common noise for check
-        h_clean = re.sub(r'[^a-z0-9\s]', '', h_name)
-        h_words = h_clean.split()
-        # If all important words of a hotel are in the text in correct order
-        if len(h_words) >= 2: # Only for meaningful names
-            if h_clean in text_normalized:
+        # Remove common noise for check (MUST be identical to text_clean_for_search logic)
+        h_clean = re.sub(r'[^a-z0-9\s]', ' ', h_name)
+        h_clean = re.sub(r'\s+', ' ', h_clean).strip()
+        
+        # Word check: if a significant part of the name is in the text
+        h_words = [w for w in h_clean.split() if w not in _NOISE_TOKENS and len(w) > 2]
+        
+        if h_words:
+            # 1. Check if the full clean name is in the clean text
+            if h_clean in text_clean_for_search:
                 direct_matched_hotels.append(h['hotel'])
+            # 2. Check if all important words are present (word overlap)
+            elif all(word in text_clean_for_search for word in h_words):
+                # Extra check: unique words like "Playamar" or "Java" must match
+                unique_words = set(h_words) - BRANDS
+                if not unique_words or any(u in text_clean_for_search for u in unique_words):
+                    direct_matched_hotels.append(h['hotel'])
     
     logger.info(f"Direct matching found: {direct_matched_hotels}")
     # -----------------------------------------
@@ -746,16 +759,35 @@ async def format_tour_message(user_text: str, do_cleanup: bool = False, raw_voic
     # Final check: if we have prices but fewer hotels, try to find missing hotels by simple word search
     if expected_count > 0 and len(extracted_hotels) < expected_count:
         logger.info(f"Still missing {expected_count - len(extracted_hotels)} hotels. Searching for unmatched candidates...")
-        # Get words from text that aren't already part of a matched hotel
-        text_words = set(re.findall(r'\w+', hotel_search_text_cleaned))
+        # Get blocks from text to find which "N готель" is missing
+        text_lower = hotel_search_text.lower()
         
-        for h in relevant_hotels:
-            if h['hotel'] in extracted_hotels: continue
-            h_norm = normalize_name(h['hotel'])
-            h_words = set(re.findall(r'\w+', h_norm)) - BRANDS
-            if h_words and h_words.issubset(text_words):
-                extracted_hotels.append(h['hotel'])
-                if len(extracted_hotels) == expected_count: break
+        recovered_hotels = [None] * expected_count
+        # Fill in what we already have by checking their positions or just simple assignment if count matches
+        # For now, let's try to find which "N готель" matches which extracted hotel
+        for h in extracted_hotels:
+            # Simple heuristic: if we can't find position, we'll fill gaps later
+            recovered_hotels[extracted_hotels.index(h)] = h
+
+        for i in range(expected_count):
+            if recovered_hotels[i] is not None: continue
+            
+            # Try to find a hotel that is mentioned near "i+1 готель"
+            ordinal_pattern = rf"(?:{i+1}|{['перший','другий','третій','четвертий','п’ятий','шостий','сьомий','восьмий','дев’ятий','десятий'][i]})\s*(?:готель|отель|варіант)"
+            context_match = re.search(ordinal_pattern + r"(.*?)(?:\d+\s*(?:готель|отель|варіант)|$)", text_lower, re.DOTALL)
+            
+            if context_match:
+                context_text = context_match.group(1)
+                # Search for any hotel from DB in this specific context
+                for h in relevant_hotels:
+                    h_norm = normalize_name(h['hotel'])
+                    unique_words = set(re.findall(r'\w+', h_norm)) - BRANDS
+                    if unique_words and all(word in context_text for word in unique_words):
+                        recovered_hotels[i] = h['hotel']
+                        break
+        
+        # Filter out None and deduplicate while keeping order
+        extracted_hotels = [h for h in recovered_hotels if h is not None]
     
     # FINAL SYNC: Ensure extracted_hotels and hotel_prices are same length without shifting!
     if expected_count > 0:
