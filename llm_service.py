@@ -932,10 +932,7 @@ async def format_tour_message(user_text: str, do_cleanup: bool = False, raw_voic
         else:
             # 2. Стандартний пошук для нормальних готелів
             match, score = fuzzy_match_hotel(h_name, relevant_hotels)
-            if score < 0.85 and all_hotels_list:
-                global_match, g_score = fuzzy_match_hotel(h_name, all_hotels_list)
-                if g_score > 0.85:
-                    match, score = global_match, g_score
+            # Глобальний пошук видалено, щоб уникнути підміни готелів з інших напрямків
         
         display_name = match["hotel"]
         stars = _extract_allowed_stars(display_name)
@@ -974,7 +971,8 @@ async def format_tour_message(user_text: str, do_cleanup: bool = False, raw_voic
     else:
         # СУВОРИЙ МАПІНГ: Шукаємо ціну саме для цього готелю
         for h_info in matched_hotels:
-            hotel_name = h_info['hotel'].replace("⚠️", "").strip()
+            # Очищаємо ім'я від всіх плашок, щоб точно знайти його в словнику цін
+            hotel_name = h_info['hotel'].replace("⚠️", "").replace("(немає в базі)", "").replace("[NOT_FOUND]", "").strip()
             # Clean stars/ratings from name for search
             hotel_name = re.sub(r'\s*[1-5]\s*(?:\*|★)', '', hotel_name).strip()
             
@@ -1042,7 +1040,7 @@ async def format_tour_message(user_text: str, do_cleanup: bool = False, raw_voic
             elif hotel_stars_list and idx < len(hotel_stars_list):
                 stars_val = _safe_int(hotel_stars_list[idx])
             
-            tax_per_night = get_tax_per_person_per_night(selected_dest or "", stars_val, month, total_people)
+            tax_per_night = get_tax_per_person_per_night(clean_dest_name or "", stars_val, month, total_people)
             total_tax_for_stay = tax_per_night * nights * adults
             tax_per_person_share = total_tax_for_stay / total_people if total_people > 0 else 0
             

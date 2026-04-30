@@ -15,7 +15,7 @@ logger = logging.getLogger(__name__)
 VOICE_CLEANUP_MODELS = ["openai/gpt-5.4-mini", "google/gemini-2.5-flash"]
 
 # Whisper prompt for transcription
-WHISPER_PROMPT = "Майорка, Тенеріфе, BLUESEA, Globales, AzuLine, HSM, BJ Playamar, Iberostar, Rixos, готель, євро, сніданки, дорослих."
+WHISPER_PROMPT = "Майорка, Тенеріфе, Коста-Брава, BLUESEA, Globales, AzuLine, HSM, Riu, Barcelo, Iberostar, Meliá, Palladium, Alua, THB, Playamar, готель, євро, сніданки, дорослих."
 
 # Prompt for cleaning up voice transcription
 VOICE_CLEANUP_PROMPT = """Ти — коректор туристичних текстів. Твоє завдання: виправити помилки розпізнавання голосу (особливо в назвах готелів) та чітко структурувати текст. 
