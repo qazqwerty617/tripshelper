@@ -572,16 +572,19 @@ def _fallback_hotel_extraction(user_text: str, candidate_hotels: list) -> list:
             
     return _dedupe_keep_order(found_hotels)
 
-async def format_tour_message(user_text: str, do_cleanup: bool = False) -> str:
+async def format_tour_message(user_text: str, do_cleanup: bool = False, raw_voice_text: str = None) -> str:
     db = get_hotel_db()
     destinations = list(db.keys())
+    
+    # Text to use for hotel name extraction (raw is better for fuzzy matching)
+    hotel_search_text = raw_voice_text if raw_voice_text else user_text
     
     # 0. Cleanup in parallel with initial detection if requested
     cleanup_task = None
     if do_cleanup:
         cleanup_task = asyncio.create_task(cleanup_transcribed_text(user_text))
 
-    selected_dest = _pick_destination_by_keywords(user_text, destinations)
+    selected_dest = _pick_destination_by_keywords(hotel_search_text, destinations)
     
     fast_models = ["openai/gpt-5.4-mini", "google/gemini-2.5-flash"]
     smart_models = ["openai/gpt-5.4-mini", "google/gemini-2.5-flash"]
@@ -604,7 +607,7 @@ async def format_tour_message(user_text: str, do_cleanup: bool = False) -> str:
         return destinations[0] if destinations else "Unknown"
 
     price_task = asyncio.create_task(extract_prices_from_text(user_text, fast_models))
-    dest_task = asyncio.create_task(_detect_destination(user_text))
+    dest_task = asyncio.create_task(_detect_destination(hotel_search_text))
     meal_task = asyncio.create_task(_extract_meals(user_text, fast_models))
     
     async def _extract_hotels_broadly(text):
@@ -621,7 +624,7 @@ async def format_tour_message(user_text: str, do_cleanup: bool = False) -> str:
                 except: pass
         return []
 
-    broad_hotel_task = asyncio.create_task(_extract_hotels_broadly(user_text))
+    broad_hotel_task = asyncio.create_task(_extract_hotels_broadly(hotel_search_text))
     
     # Wait for first-round tasks
     if cleanup_task:
@@ -637,7 +640,7 @@ async def format_tour_message(user_text: str, do_cleanup: bool = False) -> str:
     relevant_hotels = db.get(selected_dest, [])
     # Enable smart candidate filtering for large databases (Crete, Mallorca, etc.)
     # High-quality matches will always be in the top 100.
-    candidate_hotels = _build_hotel_candidates(user_text, relevant_hotels, limit=60)
+    candidate_hotels = _build_hotel_candidates(hotel_search_text, relevant_hotels, limit=60)
     
     async def _do_targeted_extract(text_to_parse):
         # Use the smart-filtered list
@@ -659,21 +662,22 @@ async def format_tour_message(user_text: str, do_cleanup: bool = False) -> str:
                 except: pass
         return []
 
-    # If it was a voice message, the raw transcription might be better for hotel name extraction
-    # than the LLM-cleaned one which might "over-clean" names.
-    # We'll try to extract from the user_text (which might be cleaned) and fallback if needed.
-    extracted_hotels = await _do_targeted_extract(user_text)
+    # Try extracting from hotel_search_text (which is raw voice if available)
+    extracted_hotels = await _do_targeted_extract(hotel_search_text)
     
     if not extracted_hotels:
         logger.info("LLM extraction failed or returned empty list. Trying fallback search...")
-        extracted_hotels = _fallback_hotel_extraction(user_text, candidate_hotels)
+        extracted_hotels = _fallback_hotel_extraction(hotel_search_text, candidate_hotels)
         if not extracted_hotels:
              # Try one more time with broader candidate list
-             extracted_hotels = _fallback_hotel_extraction(user_text, relevant_hotels[:200])
+             extracted_hotels = _fallback_hotel_extraction(hotel_search_text, relevant_hotels[:200])
              
-    if not extracted_hotels and do_cleanup:
-        # If it was a voice message and nothing was found, try extracting from a slightly broader context
-        logger.info("No hotels found in cleaned text even with fallback.")
+    if not extracted_hotels and raw_voice_text:
+        # If extraction from raw failed, try the cleaned text as last resort
+        logger.info("Retrying extraction from cleaned text...")
+        extracted_hotels = await _do_targeted_extract(user_text)
+        if not extracted_hotels:
+            extracted_hotels = _fallback_hotel_extraction(user_text, candidate_hotels)
     
     # HARD LIMIT: If price_data tells us exactly how many hotels there should be, use it.
     if price_data and price_data.get("hotel_prices"):

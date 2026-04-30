@@ -119,15 +119,18 @@ async def handle_voice(message: Message):
     file_bytes = buf.getvalue()
     
     # Use the new voice handler for transcription and cleanup
-    text = await voice_handler.process_voice_message(file_bytes)
-    if not text or text.startswith("❌"):
+    raw_text = await voice_handler.transcribe_voice(file_bytes)
+    if not raw_text or raw_text.startswith("❌"):
         await msg.edit_text("🤷 Не вдалося розпізнати текст.")
         return
 
+    # Clean up the text for general structure and price extraction
+    cleaned_text = await voice_handler.cleanup_transcribed_text(raw_text)
+
     await msg.edit_text("✨ Формую підбірку...", parse_mode="HTML")
     try:
-        # Pass the already cleaned text and disable internal cleanup in llm_service
-        result = await llm_service.format_tour_message(text, do_cleanup=False)
+        # Pass BOTH texts: raw for hotel extraction, cleaned for prices and structure
+        result = await llm_service.format_tour_message(cleaned_text, raw_voice_text=raw_text)
     except Exception as e:
         logger.error(f"format_tour_message voice error: {e}")
         await message.answer("❌ Внутрішня помилка під час генерації. Спробуй ще раз.")
