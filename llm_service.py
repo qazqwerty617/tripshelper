@@ -697,12 +697,16 @@ async def format_tour_message(user_text: str, do_cleanup: bool = False, raw_voic
             # 1. Check if the full clean name is in the clean text
             if h_clean in text_clean_for_search:
                 direct_matched_hotels.append(h['hotel'])
-            # 2. Check if all important words are present (word overlap)
-            elif all(word in text_clean_for_search for word in h_words):
-                # Extra check: unique words like "Playamar" or "Java" must match
-                unique_words = set(h_words) - BRANDS
-                if not unique_words or any(u in text_clean_for_search for u in unique_words):
+            # 2. Check if ALL important unique words match exactly (e.g. "Playamar", "Java")
+            else:
+                unique_db_words = set(h_words) - BRANDS
+                if unique_db_words and all(word in text_clean_for_search for word in unique_db_words):
                     direct_matched_hotels.append(h['hotel'])
+    
+    # Special case: Playamar vs Caballero/Mar Hotels (Prioritize Playamar if it's in text)
+    if "playamar" in text_clean_for_search:
+        # Filter out other matches that might have "Mar" or similar but are not Playamar
+        direct_matched_hotels = [name for name in direct_matched_hotels if "playamar" in name.lower() or "playamar" not in " ".join(direct_matched_hotels).lower()]
     
     logger.info(f"Direct matching found: {direct_matched_hotels}")
     # -----------------------------------------
@@ -807,11 +811,11 @@ async def format_tour_message(user_text: str, do_cleanup: bool = False, raw_voic
     seen_hotels = set()
     for h_name in extracted_hotels:
         match, score = fuzzy_match_hotel(h_name, candidate_hotels)
-        if score == 0.0 or "Посилання відсутнє" in match["link"]:
+        if score < 0.85 and "Посилання відсутнє" in match["link"]: # Increased threshold for database match
             match, score = fuzzy_match_hotel(h_name, relevant_hotels)
-        if score == 0.0 and all_hotels_list:
+        if score < 0.85 and all_hotels_list:
             global_match, g_score = fuzzy_match_hotel(h_name, all_hotels_list)
-            if g_score > 0:
+            if g_score > 0.85:
                 match, score = global_match, g_score
         
         # New Rule: If confidence is low, add warning emoji. If no match, use original name.
@@ -822,9 +826,13 @@ async def format_tour_message(user_text: str, do_cleanup: bool = False, raw_voic
         # to avoid "3* 3★ 3★"
         display_name = re.sub(r'\s*[1-5]\s*(?:\*|★)', '', display_name).strip()
 
-        if score == 0.0:
+        # HALLUCINATION PROTECTION: If score is low, DO NOT use the database name.
+        # Use the name provided by the manager in the text.
+        if score < 0.80:
+            logger.warning(f"Low match score ({score}) for '{h_name}'. Using original name instead of '{match['hotel']}'.")
             display_name = f"{h_name} ⚠️"
-        elif score < 0.65: # Threshold for warning emoji (slightly above the 0.60 matching threshold)
+            match = {"hotel": display_name, "link": "Посилання відсутнє ⚠️"}
+        elif score < 0.90: 
             display_name = f"{display_name} ⚠️"
 
         # Force stars from DB if they were extracted
