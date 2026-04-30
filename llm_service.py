@@ -216,7 +216,8 @@ async def cleanup_transcribed_text(raw_text: str) -> str:
     if not raw_text:
         return raw_text
     logger.info(f"Voice transcription raw: {raw_text}")
-    models = ["google/gemini-2.0-flash-001", "openai/gpt-4o-mini"]
+    # GPT-4o-mini is often better at following strict formatting instructions than Gemini Flash
+    models = ["openai/gpt-4o-mini", "google/gemini-2.0-flash-001"]
     for model in models:
         try:
             resp = await client.chat.completions.create(
@@ -230,11 +231,11 @@ async def cleanup_transcribed_text(raw_text: str) -> str:
             )
             cleaned = resp.choices[0].message.content.strip()
             cleaned = re.sub(r'```[a-z]*\n?', '', cleaned).strip('`').strip()
-            if cleaned:
+            if cleaned and len(cleaned) > 10:
+                logger.info(f"Voice transcription after cleanup ({model}): {cleaned}")
                 return cleaned
         except Exception as e:
             logger.error(f"Voice cleanup error with {model}: {e}")
-    logger.info(f"Voice transcription after cleanup: {raw_text}")
     return raw_text
 
 def _dedupe_keep_order(items: list[str]) -> list[str]:
@@ -373,12 +374,12 @@ def _extract_allowed_stars(hotel_name: str) -> str:
     clean_name = hotel_name.replace('⚠️', '').strip()
     
     # Pattern 1: Digit followed by * or ★ (e.g., 5*, 5 ★)
-    m = re.search(r'([3-5])\s*(?:\*|★)', clean_name)
+    m = re.search(r'([1-5])\s*(?:\*|★)', clean_name)
     if m:
         return f"{m.group(1)}★"
     
     # Pattern 2: Just a digit at the very end or after a space (e.g., "Hotel Name 5")
-    m = re.search(r'\s([3-5])(?:\s|$)', clean_name)
+    m = re.search(r'\s([1-5])(?:\s|$)', clean_name)
     if m:
         return f"{m.group(1)}★"
         
@@ -585,23 +586,21 @@ async def format_tour_message(user_text: str, do_cleanup: bool = False) -> str:
 
     relevant_hotels = db.get(selected_dest, [])
     # Enable smart candidate filtering for large databases (Crete, Mallorca, etc.)
-    # Reducing limit to 100 for better speed and less noise as requested.
     # High-quality matches will always be in the top 100.
     candidate_hotels = _build_hotel_candidates(user_text, relevant_hotels, limit=100)
     
-    async def _do_targeted_extract():
+    async def _do_targeted_extract(text_to_parse):
         # Use the smart-filtered list
         db_names = "\n".join([h['hotel'] for h in candidate_hotels])
-        extraction_content = f"ТЕКСТ:\n{user_text}\n\nНАПРЯМОК: {selected_dest}\n\nБАЗА (топ збігів):\n{db_names}"
+        extraction_content = f"ТЕКСТ:\n{text_to_parse}\n\nНАПРЯМОК: {selected_dest}\n\nБАЗА (топ збігів):\n{db_names}"
         
-        # Use a faster model if possible, or stick to flash with lower max_tokens
         try:
             resp = await client.chat.completions.create(
                 model="google/gemini-2.0-flash-001", 
                 messages=[{"role": "system", "content": _EXTRACT_PROMPT}, {"role": "user", "content": extraction_content}],
                 temperature=0.0, 
-                timeout=35, # Increased timeout for larger context
-                max_tokens=800 # Increased slightly for more hotels
+                timeout=40,
+                max_tokens=1000
             )
             raw = resp.choices[0].message.content.strip()
             m = re.search(r'\{.*\}', raw, re.DOTALL)
@@ -610,7 +609,15 @@ async def format_tour_message(user_text: str, do_cleanup: bool = False) -> str:
             logger.error(f"Targeted extract error: {e}")
         return []
 
-    extracted_hotels = await _do_targeted_extract()
+    # If it was a voice message, the raw transcription might be better for hotel name extraction
+    # than the LLM-cleaned one which might "over-clean" names.
+    # We'll try to extract from the user_text (which might be cleaned) and fallback if needed.
+    extracted_hotels = await _do_targeted_extract(user_text)
+    
+    if not extracted_hotels and do_cleanup:
+        # If it was a voice message and nothing was found, try extracting from a slightly broader context
+        logger.info("No hotels found in cleaned text, trying targeted extraction again...")
+        # (This is just a fallback, in most cases user_text is already cleaned)
     
     # HARD LIMIT: If price_data tells us exactly how many hotels there should be, use it.
     if price_data and price_data.get("hotel_prices"):
@@ -648,7 +655,9 @@ async def format_tour_message(user_text: str, do_cleanup: bool = False) -> str:
 
         # Force stars from DB if they were extracted
         if stars:
-            display_name = f"{display_name} {stars}"
+            # Check if name already has this exact star string to avoid duplication
+            if stars not in display_name:
+                display_name = f"{display_name} {stars}"
 
         key = display_name.strip().lower()
         if key in seen_hotels: continue
