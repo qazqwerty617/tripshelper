@@ -30,8 +30,9 @@ def get_hotel_db() -> Dict[str, List[Dict[str, str]]]:
         return _db_cache["data"]
 
     try:
-        # Use read_only=True for much better performance
-        wb = openpyxl.load_workbook(EXCEL_PATH, data_only=True, read_only=True)
+        # read_only=True DOES NOT support hyperlinks. We must use read_only=False.
+        # data_only=False to see formulas like =HYPERLINK(...)
+        wb = openpyxl.load_workbook(EXCEL_PATH, data_only=False, read_only=False)
         db = {}
 
         for sheet_name in wb.sheetnames:
@@ -39,28 +40,49 @@ def get_hotel_db() -> Dict[str, List[Dict[str, str]]]:
             normalized_sheet = sheet_name.strip().lower()
             hotels = []
 
-            # iter_rows in read_only mode is very efficient
-            for row in ws.iter_rows(values_only=True):
-                if not any(row): continue
+            # Use ws.rows or iter_rows without values_only to get Cell objects
+            for row in ws.iter_rows():
+                if not any(cell.value for cell in row if cell.value is not None):
+                    continue
                 
                 hotel_name = ""
                 link = ""
 
-                for val in row:
+                for cell in row:
+                    val = cell.value
                     if val is None:
                         continue
                     
                     s_val = str(val).strip()
                     if not s_val: continue
 
-                    # Basic link detection in values (read_only doesn't support .hyperlink well)
-                    if s_val.startswith("http") or s_val.startswith("www"):
+                    # 1. Try to get link from cell.hyperlink (the blue underlined text)
+                    if cell.hyperlink and cell.hyperlink.target:
+                        target = str(cell.hyperlink.target).strip()
+                        if target.startswith("http") or target.startswith("www"):
+                            link = target
+
+                    # 2. Try to extract from =HYPERLINK formula
+                    if not link and s_val.startswith("=HYPERLINK"):
+                        match = re.search(r'=HYPERLINK\("([^"]+)"', s_val, re.IGNORECASE)
+                        if match:
+                            link = match.group(1)
+                            # If it's a formula, we need the "friendly name" as hotel name if not found yet
+                            name_match = re.search(r', ?"([^"]+)"\)', s_val)
+                            if not hotel_name and name_match:
+                                hotel_name = name_match.group(1)
+
+                    # 3. If it's just a plain text link
+                    if not link and (s_val.startswith("http") or s_val.startswith("www")):
                         link = s_val
-                    elif len(s_val) > 2 and not s_val.isdigit() and not s_val.startswith("="):
-                        hotel_name = s_val
+
+                    # 4. If it's a potential hotel name (not a digit, not a formula, not a link)
+                    if not s_val.isdigit() and not s_val.startswith("=") and not (s_val.startswith("http") or s_val.startswith("www")):
+                        if len(s_val) > 2:
+                            hotel_name = s_val
 
                 if hotel_name:
-                    hotels.append({"hotel": hotel_name, "link": link})
+                    hotels.append({"hotel": hotel_name, "link": link or "Посилання відсутнє ⚠️"})
 
             if hotels and "податок" not in normalized_sheet:
                 db[normalized_sheet] = hotels
@@ -93,7 +115,7 @@ def get_tourist_tax_db() -> str:
     if not os.path.exists(EXCEL_PATH):
         return ""
     try:
-        wb = openpyxl.load_workbook(EXCEL_PATH)
+        wb = openpyxl.load_workbook(EXCEL_PATH, data_only=True, read_only=False)
         tax_md = []
         for sheet_name in wb.sheetnames:
             if "ПОДАТОК" in sheet_name.upper():
@@ -192,7 +214,8 @@ def get_tax_per_person_per_night(destination: str, stars: int, month: int, num_p
         if not resort_name:
             resort_name = destination.strip().lower()
 
-        wb = openpyxl.load_workbook(EXCEL_PATH, read_only=True)
+        # Use read_only=False to be consistent with get_hotel_db and ensure access if needed
+        wb = openpyxl.load_workbook(EXCEL_PATH, data_only=True, read_only=False)
         for sheet_name in wb.sheetnames:
             if "ПОДАТОК" not in sheet_name.upper():
                 continue
