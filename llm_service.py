@@ -282,7 +282,7 @@ def fuzzy_match_hotel(hotel_name: str, db: list) -> tuple[dict, float]:
             "playmar": "playamar", "blaucel": "bluesea", "багамас": "bahamas",
             "іберостар": "iberostar", "ріксос": "rixos", "мітсіс": "mitsis",
             "глікотель": "grecotel", "грекотель": "grecotel", "соль": "sol", "мелія": "melia",
-            "хсм": "hsm", "бг": "bg", "каста": "costa", "калла": "cala", "calla": "cala", "міллер": "millor",
+            "хсм": "hsm", "бг": "bg", "bg": "bj", "каста": "costa", "калла": "cala", "calla": "cala", "міллер": "millor",
             "miller": "millor", "медіадіа": "mediodia", "mediadia": "mediodia", "глобаліс": "globales",
             "globalis": "globales", "ізабель": "isabel", "азулін": "azuline"
         }
@@ -546,7 +546,8 @@ def _fallback_hotel_extraction(user_text: str, candidate_hotels: list) -> list:
             "бі джей": "bj", "бі джи": "bg", "би джей": "bj", "би джи": "bg", "біджей": "bj", "плеймар": "playamar",
             "playmar": "playamar", "blaucel": "bluesea", "багамас": "bahamas", "casta": "costa", "calla": "cala",
             "mediadia": "mediodia", "globalis": "globales", "ізабель": "isabel", "азулін": "azuline",
-            "каста": "costa", "калла": "cala", "міллер": "millor", "медіадіа": "mediodia", "глобаліс": "globales"
+            "каста": "costa", "калла": "cala", "міллер": "millor", "медіадіа": "mediodia", "глобаліс": "globales",
+            "bg": "bj", "bg ": "bj ", " bg": " bj" # Common transcription swap
         }
         for old, new in replacements.items():
             t = t.replace(old, new)
@@ -600,8 +601,8 @@ async def format_tour_message(user_text: str, do_cleanup: bool = False) -> str:
 
     selected_dest = _pick_destination_by_keywords(user_text, destinations)
     
-    fast_models = ["google/gemini-2.0-flash-001", "openai/gpt-4o-mini"]
-    smart_models = ["google/gemini-2.0-flash-001", "openai/gpt-4o-mini"]
+    fast_models = ["openai/gpt-4o-mini", "google/gemini-2.0-flash-001"]
+    smart_models = ["openai/gpt-4o-mini", "google/gemini-2.0-flash-001"]
     
     start_time = asyncio.get_event_loop().time()
 
