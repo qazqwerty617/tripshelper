@@ -57,7 +57,7 @@ _DESTINATION_ALIASES = {
 }
 
 # Brands for strict matching (Global for all functions)
-BRANDS = {"bluesea", "hipotels", "globales", "iberostar", "rixos", "mitsis", "grecotel", "sol", "melia", "hsm", "azuline", "bj", "bg"}
+BRANDS = {"bluesea", "hipotels", "globales", "iberostar", "rixos", "mitsis", "grecotel", "sol", "melia", "hsm", "azuline", "bj", "bg", "thb", "bahia", "palladium", "h10", "riu", "barcelo", "occidental", "allegro", "viva", "zafiro", "js", "bjs", "mar"}
 
 _DESTINATION_PROMPT = """Ти — туристичний асистент. Тобі надіслали текст-чернетку від менеджера з описом туру.
 Твоє завдання: визначити напрямок (країну/острів/регіон) з тексту і вибрати один найбільш підходящий варіант із наданого списку доступних напрямків.
@@ -259,7 +259,6 @@ def fuzzy_match_hotel(hotel_name: str, db: list) -> tuple[dict, float]:
         replacements = {
             "blucia": "bluesea", "blusia": "bluesea", "bluesee": "bluesea", "блю сі": "bluesea", "блюсі": "bluesea",
             "бі джей": "bj", "би джей": "bj", "біджей": "bj", "плеймар": "playamar", "playmar": "playamar",
-            "bg hotel caballero": "bj playamar", "bg caballero": "bj playamar", # Hard fix for specific hallucination
             "blaucel": "bluesea", "багамас": "bahamas",
             "іберостар": "iberostar", "ріксос": "rixos", "мітсіс": "mitsis",
             "глікотель": "grecotel", "грекотель": "grecotel", "соль": "sol", "мелія": "melia",
@@ -267,11 +266,6 @@ def fuzzy_match_hotel(hotel_name: str, db: list) -> tuple[dict, float]:
             "miller": "millor", "медіадіа": "mediodia", "mediadia": "mediodia", "глобаліс": "globales",
             "globalis": "globales", "ізабель": "isabel", "азулін": "azuline", "гранд": "gran", "grand": "gran"
         }
-        
-        # Add BG -> BJ only if we are specifically looking for Playamar to avoid breaking other BG hotels
-        if "playamar" in cleaned:
-            replacements["bg"] = "bj"
-            replacements["бг"] = "bj"
         
         for old, new in replacements.items():
             cleaned = cleaned.replace(old, new)
@@ -329,11 +323,11 @@ def fuzzy_match_hotel(hotel_name: str, db: list) -> tuple[dict, float]:
         score = ratio * 0.3 + overlap_ratio * 0.7
         
         # BRAND PENALTY/BONUS - Very Strict
-        if query_brands and db_brands:
+        if query_brands or db_brands:
             if query_brands != db_brands:
-                score -= 1.5 # Extreme penalty for different brands
+                score -= 2.0 # Even more extreme penalty for different/missing brands
             else:
-                score += 0.3 # Bonus for same brand
+                score += 0.4 # Bonus for same brand
         
         # UNIQUE WORD BONUS (e.g. "Playamar", "Java", "Isabel")
         # Words that are NOT brands and NOT common noise
@@ -342,18 +336,27 @@ def fuzzy_match_hotel(hotel_name: str, db: list) -> tuple[dict, float]:
         unique_overlap = len(unique_query_words & unique_db_words)
         if unique_query_words:
             unique_ratio = unique_overlap / len(unique_query_words)
-            score += unique_ratio * 0.5 # Big bonus for matching unique part of name
+            score += unique_ratio * 0.7 # Increased bonus
+            
+            # Additional penalty if query has unique words that are NOT in DB name
+            # (e.g. Query="Blue Sea Cala Millor", DB="Cala Millor Garden")
+            # Unique query: {"bluesea", "cala", "millor"} (if bluesea is not a brand)
+            # Unique DB: {"cala", "millor", "garden"}
+            # This helps distinguish between hotels with similar location but different brands/names
+            extra_words = unique_query_words - unique_db_words
+            if extra_words:
+                score -= len(extra_words) * 0.2
 
         # Penalty for large length difference
         len_diff = abs(len(query) - len(db_name))
-        if len_diff > 12:
-            score -= 0.3
+        if len_diff > 10:
+            score -= 0.4
 
         if score > max_score:
             max_score = score
             best_match = h
             
-    if best_match and max_score > 0.65: 
+    if best_match and max_score > 0.82: # Increased threshold from 0.65
         return best_match, max_score
         
     return {"hotel": hotel_name, "link": "Посилання відсутнє ⚠️"}, 0.0
@@ -690,18 +693,24 @@ async def format_tour_message(user_text: str, do_cleanup: bool = False, raw_voic
         h_clean = re.sub(r'[^a-z0-9\s]', ' ', h_name)
         h_clean = re.sub(r'\s+', ' ', h_clean).strip()
         
-        # Word check: if a significant part of the name is in the text
+        # Filter out noise from DB name
         h_words = [w for w in h_clean.split() if w not in _NOISE_TOKENS and len(w) > 2]
         
         if h_words:
             # 1. Check if the full clean name is in the clean text
             if h_clean in text_clean_for_search:
                 direct_matched_hotels.append(h['hotel'])
-            # 2. Check if ALL important unique words match exactly (e.g. "Playamar", "Java")
+            # 2. Check if ALL important unique words match exactly
             else:
                 unique_db_words = set(h_words) - BRANDS
                 if unique_db_words and all(word in text_clean_for_search for word in unique_db_words):
-                    direct_matched_hotels.append(h['hotel'])
+                    # Also ensure the brand matches if present in both
+                    db_brands = set(h_words) & BRANDS
+                    text_words = set(text_clean_for_search.split())
+                    text_brands = text_words & BRANDS
+                    
+                    if not db_brands or (db_brands & text_brands):
+                        direct_matched_hotels.append(h['hotel'])
     
     # Special case: Playamar vs Caballero/Mar Hotels (Prioritize Playamar if it's in text)
     if "playamar" in text_clean_for_search:
