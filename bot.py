@@ -3,7 +3,7 @@ import logging
 import io
 from aiogram import Bot, Dispatcher, F
 from aiogram.types import Message
-from aiogram.filters import CommandStart, Command
+from aiogram.filters import CommandStart
 from aiogram.client.session.aiohttp import AiohttpSession
 from config import BOT_TOKEN, EXCEL_PATH
 import os
@@ -57,23 +57,7 @@ ADMIN_IDS = [340517348, 8482582995]
 
 @dp.message(CommandStart())
 async def start_cmd(message: Message):
-    await message.answer(
-        "👋 Привіт! Я ваш розумний асистент для створення туристичних підбірок.\n\n"
-        "📝 **Як я працюю:**\n"
-        "1. Надішліть мені текст або голосове з деталями туру (готелі, ціни, дати).\n"
-        "2. Я автоматично знайду готелі в базі, розрахую ціни з націнкою та податками.\n"
-        "3. Ви отримаєте готове повідомлення для клієнта.\n\n"
-        "⚙️ **Для адмінів:** надішліть .xlsx файл для оновлення бази.",
-        parse_mode="Markdown"
-    )
-
-@dp.message(Command("clear_cache"))
-async def clear_cache_cmd(message: Message):
-    if message.from_user.id not in ADMIN_IDS:
-        return
-    
-    excel_parser._db_cache["data"] = None
-    await message.answer("✅ Кеш бази даних очищено. Наступний запит завантажить свіжі дані з Excel.")
+    await message.answer("Привіт! Я бот для формування красивих підбірок турів. Надішли мені текст або голосове повідомлення з деталями туру і цінами, і я все красиво оформлю.")
 
 @dp.message(F.document)
 async def handle_document(message: Message):
