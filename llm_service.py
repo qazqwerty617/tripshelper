@@ -655,6 +655,47 @@ def _count_potential_hotels(text: str) -> int:
     count = len(all_matches)
     return count if count > 0 else 1
 
+def _sort_hotels_by_appearance(hotels: list[str], text: str) -> list[str]:
+    """Sorts hotel names based on their first appearance in the text."""
+    text_lower = text.lower()
+    # Normalize text for searching (remove punctuation but keep ordinals)
+    text_norm = re.sub(r'[^a-z0-9а-яіїєґ\s]', ' ', text_lower)
+    text_norm = re.sub(r'\s+', ' ', text_norm).strip()
+
+    def get_first_pos(h_name: str) -> int:
+        clean_name = h_name.replace("[NOT_FOUND]", "").strip().lower()
+        # Clean stars/ratings from name for search
+        clean_name = re.sub(r'\s*[1-5]\s*(?:\*|★)', ' ', clean_name)
+        clean_name = re.sub(r'[^a-z0-9а-яіїєґ\s]', ' ', clean_name)
+        clean_name = re.sub(r'\s+', ' ', clean_name).strip()
+        
+        if not clean_name: return 999999
+        
+        # 1. Try full name match
+        pos = text_norm.find(clean_name)
+        if pos != -1: return pos
+        
+        # 2. Try unique words match (first unique word that appears)
+        words = [w for w in clean_name.split() if w not in _NOISE_TOKENS and len(w) > 3]
+        if words:
+            positions = []
+            for w in words:
+                p = text_norm.find(w)
+                if p != -1: positions.append(p)
+            if positions: return min(positions)
+            
+        return 999999
+
+    # Sort and remove duplicates while preserving first appearance
+    seen = set()
+    sorted_hotels = sorted(hotels, key=get_first_pos)
+    final = []
+    for h in sorted_hotels:
+        if h.lower() not in seen:
+            final.append(h)
+            seen.add(h.lower())
+    return final
+
 async def format_tour_message(user_text: str, do_cleanup: bool = False, raw_voice_text: str = None) -> str:
     db = get_hotel_db()
     destinations = list(db.keys())
@@ -856,8 +897,11 @@ async def format_tour_message(user_text: str, do_cleanup: bool = False, raw_voic
                         recovered_hotels[i] = h['hotel']
                         break
         
-        # Filter out None and deduplicate while keeping order
-        extracted_hotels = [h for h in recovered_hotels if h is not None]
+        # Filter out None and sort by appearance in text
+        extracted_hotels = _sort_hotels_by_appearance([h for h in recovered_hotels if h is not None], hotel_search_text)
+    else:
+        # Sort extracted hotels by their appearance in text
+        extracted_hotels = _sort_hotels_by_appearance(extracted_hotels, hotel_search_text)
     
     # Final sync and price extraction refinement
     hotel_prices_map = price_data.get("hotel_prices", {}) if price_data else {}
