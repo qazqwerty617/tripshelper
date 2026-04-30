@@ -75,7 +75,9 @@ async def transcribe_voice(file_bytes: bytes) -> str:
                                 "блю сі": "BLUESEA", "Блю сі": "BLUESEA",
                                 "глобаліс": "Globales", "Глобаліс": "Globales",
                                 "плеймар": "Playamar", "Плеймар": "Playamar",
-                                "азулін": "AzuLine", "Азулін": "AzuLine"
+                                "азулін": "AzuLine", "Азулін": "AzuLine",
+                                "кала мілер": "Cala Millor", "Кала Мілер": "Cala Millor",
+                                "kala miller": "Cala Millor", "Kala Miller": "Cala Millor"
                             }
                             for bad, good in fixes.items():
                                 text = text.replace(bad, good)
@@ -107,7 +109,9 @@ async def transcribe_voice(file_bytes: bytes) -> str:
                             "блю сі": "BLUESEA", "Блю сі": "BLUESEA",
                             "глобаліс": "Globales", "Глобаліс": "Globales",
                             "плеймар": "Playamar", "Плеймар": "Playamar",
-                            "азулін": "AzuLine", "Азулін": "AzuLine"
+                            "азулін": "AzuLine", "Азулін": "AzuLine",
+                            "кала мілер": "Cala Millor", "Кала Мілер": "Cala Millor",
+                            "kala miller": "Cala Millor", "Kala Miller": "Cala Millor"
                         }
                         for bad, good in fixes.items():
                             text = text.replace(bad, good)

@@ -69,12 +69,11 @@ _EXTRACT_PROMPT = """Ти — спеціалізований AI-асистент
 Твоє завдання: знайти у тексті менеджера ВСІ згадані готелі і зіставити їх з наданим списком з бази.
 
 ПРАВИЛА:
-1. Твоя головна мета — знайти відповідність у "СПИСКУ ГОТЕЛІВ НАПРЯМКУ". 
-2. КРИТИЧНО: Якщо готелю з тексту НЕМАЄ в наданому списку і ти не впевнений на 100% у збігу — НЕ ВИГАДУЙ. У такому випадку поверни оригінальну назву з тексту менеджера, додавши префікс [NOT_FOUND].
-3. ПОРЯДОК ТА КІЛЬКІСТЬ: Повертай готелі рівно в тому порядку, в якому вони йдуть у тексті. Якщо вказано 8 готелів — поверни 8.
-4. ФОРМАТ: Тільки JSON {"hotels": ["Name 1", "Name 2", "[NOT_FOUND] Name 3"]}. Жодного іншого тексту.
-
-КРИТИЧНО: Якщо збігів нуль — використовуй [NOT_FOUND] + назва з тексту. Не намагайся підставити випадковий готель зі списку.
+1. Використовуй ТІЛЬКИ назви з наданого "СПИСКУ ГОТЕЛІВ НАПРЯМКУ". 
+2. КРИТИЧНО: Якщо готелю з тексту НЕМАЄ в списку — додай префікс [NOT_FOUND]. 
+3. ПОРЯДОК ТА КІЛЬКІСТЬ: Повертай готелі рівно в тому порядку, в якому вони йдуть у тексті. 
+4. СТРОГИЙ ЛІМІТ: Уважно порахуй, скільки цін або варіантів назвав менеджер. Ти МАЄШ повернути рівно таку ж кількість готелів! Жоден готель не повинен зникнути. 
+5. ФОРМАТ: Тільки JSON {"hotels": ["Name 1", "Name 2", "[NOT_FOUND] Name 3"]}. Жодного іншого тексту.
 """
 
 _EXTRACT_PRICES_PROMPT = """Ти — фінансовий аналітик туристичних турів. 
@@ -925,11 +924,18 @@ async def format_tour_message(user_text: str, do_cleanup: bool = False, raw_voic
     
     # Matching extracted names with DB to get links and full names
     for h_name in extracted_hotels:
-        match, score = fuzzy_match_hotel(h_name, relevant_hotels)
-        if score < 0.75 and all_hotels_list:
-            global_match, g_score = fuzzy_match_hotel(h_name, all_hotels_list)
-            if g_score > 0.75:
-                match, score = global_match, g_score
+        # 1. ПЕРЕВІРКА НА [NOT_FOUND]: якщо готелю немає, блокуємо пошук по базах!
+        if "[NOT_FOUND]" in h_name or "немає в базі" in h_name.lower() or "⚠️" in h_name:
+            display_name = h_name.replace("[NOT_FOUND]", "").replace("(немає в базі)", "").replace("⚠️", "").strip() + " ⚠️ (немає в базі)"
+            match = {"hotel": display_name, "link": "Посилання відсутнє ⚠️"}
+            score = 1.0  # Штучно ставимо високий бал, щоб заблокувати подальший пошук
+        else:
+            # 2. Стандартний пошук для нормальних готелів
+            match, score = fuzzy_match_hotel(h_name, relevant_hotels)
+            if score < 0.85 and all_hotels_list:
+                global_match, g_score = fuzzy_match_hotel(h_name, all_hotels_list)
+                if g_score > 0.85:
+                    match, score = global_match, g_score
         
         display_name = match["hotel"]
         stars = _extract_allowed_stars(display_name)
