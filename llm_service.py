@@ -700,7 +700,7 @@ async def format_tour_message(user_text: str, do_cleanup: bool = False) -> str:
         
         # CLEANUP: Remove any existing stars or symbols from display_name before adding ours
         # to avoid "3* 3★ 3★"
-        display_name = re.sub(r'\s*[3-5]\s*(?:\*|★)', '', display_name).strip()
+        display_name = re.sub(r'\s*[1-5]\s*(?:\*|★)', '', display_name).strip()
 
         if score == 0.0:
             display_name = f"{h_name} ⚠️"
@@ -835,6 +835,14 @@ async def format_tour_message(user_text: str, do_cleanup: bool = False) -> str:
         max_tokens=2500
     )
     
+    # Prepare meals alignment for the programmatic block
+    hotel_meal_list = []
+    for i in range(len(matched_hotels)):
+        if extracted_meals and i < len(extracted_meals):
+            hotel_meal_list.append(extracted_meals[i])
+        else:
+            hotel_meal_list.append("не вказано")
+
     if result:
         # 1. Start with the LLM-generated intro and recommendations
         # (We assume LLM followed the instruction to provide Intro and Recommendations)
@@ -844,10 +852,12 @@ async def format_tour_message(user_text: str, do_cleanup: bool = False) -> str:
         for i, hotel_data in enumerate(matched_hotels, 1):
             name = hotel_data['hotel']
             # Clean up stars to avoid duplicates
-            name = re.sub(r'([1-5]★)\s+\1', r'\1', name)
+            name = re.sub(r'\s*([1-5]★)\s+\1', r' \1', name)
+            # Second pass to ensure no double stars even if separated differently
+            name = re.sub(r'([1-5]★)\s*([1-5]★)', r'\1', name)
             
-            link = hotel_link_map.get(name, "Посилання відсутнє ⚠️")
-            meal = hotel_meal_map.get(name, "не вказано")
+            link = hotel_link_map.get(name.lower(), "Посилання відсутнє ⚠️")
+            meal = hotel_meal_list[i-1] # Use the prepared list
             
             options_block += f"{i}) {name}\n"
             options_block += f"🥑 {meal}\n"
