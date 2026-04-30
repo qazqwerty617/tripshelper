@@ -253,17 +253,22 @@ def fuzzy_match_hotel(hotel_name: str, db: list) -> tuple[dict, float]:
         }
         
         # Replace common transcription errors and synonyms
-        # Note: BG -> BJ is removed from global to avoid confusion in text mode
         replacements = {
             "blucia": "bluesea", "blusia": "bluesea", "bluesee": "bluesea", "блю сі": "bluesea", "блюсі": "bluesea",
-            "бі джей": "bj", "би джей": "bj", "біджей": "bj", "плеймар": "playamar",
-            "playmar": "playamar", "blaucel": "bluesea", "багамас": "bahamas",
+            "бі джей": "bj", "би джей": "bj", "біджей": "bj", "плеймар": "playamar", "playmar": "playamar",
+            "bg hotel caballero": "bj playamar", "bg caballero": "bj playamar", # Hard fix for specific hallucination
+            "blaucel": "bluesea", "багамас": "bahamas",
             "іберостар": "iberostar", "ріксос": "rixos", "мітсіс": "mitsis",
             "глікотель": "grecotel", "грекотель": "grecotel", "соль": "sol", "мелія": "melia",
             "хсм": "hsm", "каста": "costa", "калла": "cala", "calla": "cala", "міллер": "millor",
             "miller": "millor", "медіадіа": "mediodia", "mediadia": "mediodia", "глобаліс": "globales",
             "globalis": "globales", "ізабель": "isabel", "азулін": "azuline", "гранд": "gran", "grand": "gran"
         }
+        
+        # Add BG -> BJ only if we are specifically looking for Playamar to avoid breaking other BG hotels
+        if "playamar" in cleaned:
+            replacements["bg"] = "bj"
+            replacements["бг"] = "bj"
         
         for old, new in replacements.items():
             cleaned = cleaned.replace(old, new)
@@ -737,6 +742,20 @@ async def format_tour_message(user_text: str, do_cleanup: bool = False, raw_voic
         extracted_hotels = await _do_targeted_extract(user_text)
         if not extracted_hotels:
             extracted_hotels = _fallback_hotel_extraction(user_text, candidate_hotels)
+    
+    # Final check: if we have prices but fewer hotels, try to find missing hotels by simple word search
+    if expected_count > 0 and len(extracted_hotels) < expected_count:
+        logger.info(f"Still missing {expected_count - len(extracted_hotels)} hotels. Searching for unmatched candidates...")
+        # Get words from text that aren't already part of a matched hotel
+        text_words = set(re.findall(r'\w+', hotel_search_text_cleaned))
+        
+        for h in relevant_hotels:
+            if h['hotel'] in extracted_hotels: continue
+            h_norm = normalize_name(h['hotel'])
+            h_words = set(re.findall(r'\w+', h_norm)) - BRANDS
+            if h_words and h_words.issubset(text_words):
+                extracted_hotels.append(h['hotel'])
+                if len(extracted_hotels) == expected_count: break
     
     # FINAL SYNC: Ensure extracted_hotels and hotel_prices are same length without shifting!
     if expected_count > 0:
