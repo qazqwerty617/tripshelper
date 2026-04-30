@@ -264,21 +264,46 @@ def fuzzy_match_hotel(hotel_name: str, db: list) -> tuple[dict, float]:
     def normalize_name(name: str) -> str:
         # Remove stars from name for better matching
         cleaned = re.sub(r'[3-5]\s*(?:\*|★)', '', name.lower())
+        
+        # Simple Transliteration for Ukrainian/Russian names to Latin
+        trans_map = {
+            'а': 'a', 'б': 'b', 'в': 'v', 'г': 'g', 'д': 'd', 'е': 'e', 'ё': 'yo', 'ж': 'zh',
+            'з': 'z', 'и': 'i', 'й': 'y', 'к': 'k', 'л': 'l', 'м': 'm', 'н': 'n', 'о': 'o',
+            'п': 'p', 'р': 'r', 'с': 's', 'т': 't', 'у': 'u', 'ф': 'f', 'х': 'h', 'ц': 'ts',
+            'ч': 'ch', 'ш': 'sh', 'щ': 'shch', 'ъ': '', 'ы': 'y', 'ь': '', 'э': 'e', 'ю': 'yu',
+            'я': 'ya', 'і': 'i', 'ї': 'yi', 'є': 'ye'
+        }
+        
         # Replace common transcription errors and synonyms
         replacements = {
             "blucia": "bluesea", "blusea": "bluesea", "блю сі": "bluesea", "блюсі": "bluesea",
             "бі джей": "bj", "бі джи": "bg", "би джей": "bj",
             "blaucel": "bluesea", "багамас": "bahamas",
-            "іберостар": "iberostar", "ріксос": "rixos", "мітсіс": "mitsis"
+            "іберостар": "iberostar", "ріксос": "rixos", "мітсіс": "mitsis",
+            "глікотель": "grecotel", "грекотель": "grecotel", "соль": "sol", "мелія": "melia",
+            "хсм": "hsm", "бг": "bg", "біджей": "bj"
         }
+        
         for old, new in replacements.items():
             cleaned = cleaned.replace(old, new)
             
+        # Try transliterating Cyrillic tokens
+        tokens = cleaned.split()
+        normalized_tokens = []
+        for token in tokens:
+            if any(ord(c) > 127 for c in token): # Has Cyrillic
+                trans_token = "".join(trans_map.get(c, c) for c in token)
+                normalized_tokens.append(trans_token)
+            else:
+                normalized_tokens.append(token)
+        
+        cleaned = " ".join(normalized_tokens)
+            
         # Remove common separators and noise
-        cleaned = re.sub(r'[^a-z0-9а-яіїєґ\s]', ' ', cleaned)
+        cleaned = re.sub(r'[^a-z0-9\s]', ' ', cleaned)
         cleaned = re.sub(r'\s+', ' ', cleaned).strip()
-        tokens = [t for t in cleaned.split() if t not in _NOISE_TOKENS]
-        return " ".join(tokens)
+        final_tokens = [t for t in cleaned.split() if t not in _NOISE_TOKENS]
+        return " ".join(final_tokens)
 
     best_match = None
     max_score = 0.0

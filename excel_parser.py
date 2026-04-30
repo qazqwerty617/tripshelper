@@ -57,29 +57,38 @@ def get_hotel_db() -> Dict[str, List[Dict[str, str]]]:
                     if not s_val: continue
 
                     # 1. Try to get link from cell.hyperlink (the blue underlined text)
+                    current_link = ""
                     if cell.hyperlink and cell.hyperlink.target:
                         target = str(cell.hyperlink.target).strip()
                         if target.startswith("http") or target.startswith("www"):
-                            link = target
+                            current_link = target
 
                     # 2. Try to extract from =HYPERLINK formula
-                    if not link and s_val.startswith("=HYPERLINK"):
+                    if not current_link and s_val.startswith("=HYPERLINK"):
                         match = re.search(r'=HYPERLINK\("([^"]+)"', s_val, re.IGNORECASE)
                         if match:
-                            link = match.group(1)
-                            # If it's a formula, we need the "friendly name" as hotel name if not found yet
-                            name_match = re.search(r', ?"([^"]+)"\)', s_val)
-                            if not hotel_name and name_match:
-                                hotel_name = name_match.group(1)
+                            current_link = match.group(1)
+                            # If we don't have a name yet, try to get the "friendly name"
+                            if not hotel_name:
+                                name_match = re.search(r', ?"([^"]+)"\)', s_val)
+                                if name_match:
+                                    hotel_name = name_match.group(1)
 
                     # 3. If it's just a plain text link
-                    if not link and (s_val.startswith("http") or s_val.startswith("www")):
-                        link = s_val
+                    if not current_link and (s_val.startswith("http") or s_val.startswith("www")):
+                        current_link = s_val
+
+                    # Update row link if we found one
+                    if current_link:
+                        link = current_link
+                        continue # Move to next cell, don't treat link cell as a name
 
                     # 4. If it's a potential hotel name (not a digit, not a formula, not a link)
-                    if not s_val.isdigit() and not s_val.startswith("=") and not (s_val.startswith("http") or s_val.startswith("www")):
-                        if len(s_val) > 2:
-                            hotel_name = s_val
+                    # and we don't have a name yet for this row
+                    if not hotel_name:
+                        if not s_val.isdigit() and not s_val.startswith("="):
+                            if len(s_val) > 2:
+                                hotel_name = s_val
 
                 if hotel_name:
                     hotels.append({"hotel": hotel_name, "link": link or "Посилання відсутнє ⚠️"})
