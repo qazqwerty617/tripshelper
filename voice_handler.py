@@ -12,7 +12,7 @@ logger = logging.getLogger(__name__)
 
 # --- Voice Specific Settings ---
 # Models for voice transcription cleanup
-VOICE_CLEANUP_MODELS = ["google/gemini-2.0-flash-001", "openai/gpt-4o-mini"]
+VOICE_CLEANUP_MODELS = ["openai/gpt-5.4-mini", "google/gemini-2.5-flash"]
 
 # Whisper prompt for transcription
 WHISPER_PROMPT = (
