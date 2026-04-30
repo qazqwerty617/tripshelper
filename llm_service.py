@@ -338,19 +338,19 @@ def fuzzy_match_hotel(hotel_name: str, db: list) -> tuple[dict, float]:
         score = ratio * 0.3 + overlap_ratio * 0.7
         
         # Penalty for length difference
-        len_diff = abs(len(query) - len(db_name))
-        if len_diff > 20:
-            score -= 0.15
+    len_diff = abs(len(query) - len(db_name))
+    if len_diff > 25:
+        score -= 0.1
 
-        # Strong bonus for high word overlap
-        if overlap_ratio >= 0.9:
-            score += 0.4
+    # Strong bonus for high word overlap
+    if overlap_ratio >= 0.9:
+        score += 0.5
             
-        if score > max_score:
-            max_score = score
-            best_match = h
+    if score > max_score:
+        max_score = score
+        best_match = h
             
-    if best_match and max_score > 0.6: 
+    if best_match and max_score > 0.7: 
         return best_match, max_score
     return {"hotel": hotel_name, "link": "Посилання відсутнє ⚠️"}, 0.0
 
@@ -423,9 +423,17 @@ def _inject_links(text: str, hotel_link_map: dict) -> str:
 def _count_listed_hotels(text: str) -> int:
     count = 0
     for line in text.split("\n"):
-        if re.match(r'^\s*\d+\)\s+', line):
+        # Шукаємо рядки, що починаються з цифри і дужки, або просто назву готелю перед 🥑
+        if re.match(r'^\s*\d+[\)\.]\s+', line):
             count += 1
-    return count
+        elif '🥑' in line:
+            # Якщо ми бачимо значок харчування, але попередній рядок не був порахований як заголовок
+            # (це випадок, коли LLM забув номер)
+            pass 
+    
+    # Спробуємо альтернативний метод: скільки разів зустрічається 🥑
+    meal_icons = text.count('🥑')
+    return max(count, meal_icons)
 
 def _build_price_line(price_label: str, computed_prices: list) -> str:
     if not computed_prices:
@@ -612,10 +620,16 @@ async def format_tour_message(user_text: str, do_cleanup: bool = False) -> str:
         
         # New Rule: If confidence is low, add warning emoji. If no match, use original name.
         display_name = match["hotel"]
+        stars = _extract_allowed_stars(display_name)
+        
         if score == 0.0:
             display_name = f"{h_name} ⚠️"
-        elif score < 0.85:
+        elif score < 0.75: # Slightly lower threshold to avoid ⚠️ on minor differences
             display_name = f"{display_name} ⚠️"
+
+        # Force stars from DB if they were extracted but not in the display_name
+        if stars and stars not in display_name:
+            display_name = f"{display_name} {stars}"
 
         key = display_name.strip().lower()
         if key in seen_hotels: continue
@@ -696,13 +710,11 @@ async def format_tour_message(user_text: str, do_cleanup: bool = False) -> str:
             # For children/infants, we usually show total price for everyone
             if has_children:
                 total_tour_price = round(final * total_people)
-                # Infants might have a small fixed price (e.g. 50-100e for flight/insurance), 
-                # but we don't have this data explicitly, so we just use total_people.
                 computed_prices.append(total_tour_price)
             else:
                 computed_prices.append(final)
         
-        price_label = "💰 загальна вартість туру" if has_children else "💰 загальна вартість туру за особу"
+        price_label = "💰 загальна вартість туру за всіх" if has_children else "💰 загальна вартість туру за особу"
         prices_block = f"\n\nРОЗРАХОВАНІ ЦІНИ:\n{price_label} - {', '.join([f'{i+1}){p}€' for i, p in enumerate(computed_prices)])}"
     else:
         prices_block = "\n\nЦІНА НЕ ВКАЗАНА: у блоці 💰 напиши 'не вказано' для всіх готелів."
