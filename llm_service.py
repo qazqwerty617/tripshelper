@@ -246,7 +246,7 @@ def fuzzy_match_hotel(hotel_name: str, db: list) -> tuple[dict, float]:
         
         # Simple Transliteration for Ukrainian/Russian names to Latin
         trans_map = {
-            'а': 'a', 'б': 'b', 'в': 'v', 'г': 'g', 'д': 'd', 'е': 'e', 'ё': 'yo', 'ж': 'zh',
+            'а': 'a', 'б': 'b', 'в': 'v', 'г': 'g', 'ґ': 'g', 'д': 'd', 'е': 'e', 'ё': 'yo', 'ж': 'zh',
             'з': 'z', 'и': 'i', 'й': 'y', 'к': 'k', 'л': 'l', 'м': 'm', 'н': 'n', 'о': 'o',
             'п': 'p', 'р': 'r', 'с': 's', 'т': 't', 'у': 'u', 'ф': 'f', 'х': 'h', 'ц': 'ts',
             'ч': 'ch', 'ш': 'sh', 'щ': 'shch', 'ъ': '', 'ы': 'y', 'ь': '', 'э': 'e', 'ю': 'yu',
@@ -355,7 +355,7 @@ def fuzzy_match_hotel(hotel_name: str, db: list) -> tuple[dict, float]:
             max_score = score
             best_match = h
             
-    if best_match and max_score > 0.82: # Increased threshold from 0.65
+    if best_match and max_score > 0.75: # Lowered threshold from 0.82
         return best_match, max_score
         
     return {"hotel": hotel_name, "link": "Посилання відсутнє ⚠️"}, 0.0
@@ -705,14 +705,13 @@ async def format_tour_message(user_text: str, do_cleanup: bool = False, raw_voic
         raw = await _call_llm_with_retry(
             messages=[{"role": "system", "content": _EXTRACT_PROMPT}, {"role": "user", "content": f"ТЕКСТ МЕНЕДЖЕРА:\n{text}\n\nЗнайди всі готелі."}],
             models=fast_models,
-            timeout=20
+            timeout=20,
+            response_format={"type": "json_object"}
         )
         if raw:
-            m = re.search(r'\{.*\}', raw, re.DOTALL)
-            if m:
-                try:
-                    return json.loads(m.group()).get("hotels", [])
-                except: pass
+            try:
+                return json.loads(raw).get("hotels", [])
+            except: pass
         return []
 
     broad_hotel_task = asyncio.create_task(_extract_hotels_broadly(hotel_search_text))
