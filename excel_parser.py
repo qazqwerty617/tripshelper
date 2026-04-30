@@ -4,16 +4,34 @@ import logging
 import re
 from typing import List, Dict
 from config import EXCEL_PATH
+import time
 
 logger = logging.getLogger(__name__)
 
+# Cache for hotel database and tax data
+_db_cache = {
+    "data": None,
+    "last_loaded": 0,
+    "file_mtime": 0
+}
+
 def get_hotel_db() -> Dict[str, List[Dict[str, str]]]:
+    global _db_cache
+    
     if not os.path.exists(EXCEL_PATH):
         logger.warning(f"Excel file not found at {EXCEL_PATH}")
         return {}
 
+    # Check if we can use cache
+    current_mtime = os.path.getmtime(EXCEL_PATH)
+    if (_db_cache["data"] is not None and 
+        _db_cache["file_mtime"] == current_mtime and 
+        time.time() - _db_cache["last_loaded"] < 3600): # 1 hour cache
+        return _db_cache["data"]
+
     try:
-        wb = openpyxl.load_workbook(EXCEL_PATH)
+        # Use read_only=True for much better performance
+        wb = openpyxl.load_workbook(EXCEL_PATH, data_only=True, read_only=True)
         db = {}
 
         for sheet_name in wb.sheetnames:
@@ -21,32 +39,25 @@ def get_hotel_db() -> Dict[str, List[Dict[str, str]]]:
             normalized_sheet = sheet_name.strip().lower()
             hotels = []
 
-            for row in ws.iter_rows():
+            # iter_rows in read_only mode is very efficient
+            for row in ws.iter_rows(values_only=True):
+                if not any(row): continue
+                
                 hotel_name = ""
                 link = ""
 
-                for cell in row:
-                    if cell.value is None:
+                for val in row:
+                    if val is None:
                         continue
-                    val = str(cell.value).strip()
+                    
+                    s_val = str(val).strip()
+                    if not s_val: continue
 
-                    # Extract URL: check hyperlink first, then text
-                    cell_link = ""
-                    if cell.hyperlink:
-                        target = cell.hyperlink.target
-                        if target and (target.startswith("http") or target.startswith("www")):
-                            cell_link = target
-                    if not cell_link and (val.startswith("http") or val.startswith("www")):
-                        cell_link = val
-                    if not cell_link and val.startswith("=HYPERLINK"):
-                        match = re.search(r'=HYPERLINK\("([^"]+)"', val)
-                        if match:
-                            cell_link = match.group(1)
-
-                    if cell_link:
-                        link = cell_link
-                    elif len(val) > 2 and not val.isdigit():
-                        hotel_name = val
+                    # Basic link detection in values (read_only doesn't support .hyperlink well)
+                    if s_val.startswith("http") or s_val.startswith("www"):
+                        link = s_val
+                    elif len(s_val) > 2 and not s_val.isdigit() and not s_val.startswith("="):
+                        hotel_name = s_val
 
                 if hotel_name:
                     hotels.append({"hotel": hotel_name, "link": link})
@@ -54,6 +65,11 @@ def get_hotel_db() -> Dict[str, List[Dict[str, str]]]:
             if hotels and "податок" not in normalized_sheet:
                 db[normalized_sheet] = hotels
 
+        # Update cache
+        _db_cache["data"] = db
+        _db_cache["file_mtime"] = current_mtime
+        _db_cache["last_loaded"] = time.time()
+        
         return db
 
     except Exception as e:
