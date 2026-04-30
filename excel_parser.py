@@ -207,11 +207,14 @@ def get_tax_per_person_per_night(destination: str, stars: int, month: int, num_p
                 if row_resort in ("курорт", "таблиця", "ставки", "курорти", "назва"):
                     continue
                 
+                # logger.debug(f"Comparing resort: '{resort_name}' with '{row_resort}'")
+                
                 # Flexible match: either exact or one contains the other
                 if resort_name not in row_resort and row_resort not in resort_name:
                     continue
                 
                 if not _month_in_period(str(row[4]), month):
+                    logger.info(f"Tax period mismatch: '{row[4]}' for month {month}")
                     continue
                 
                 unit = str(row[5]).strip().lower() if row[5] else ""

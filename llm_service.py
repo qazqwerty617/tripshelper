@@ -214,25 +214,32 @@ _MEAL_EXTRACT_PROMPT = """Ти — спеціаліст із туристичн�
 async def _call_llm_with_retry(messages, models, temperature=0, timeout=30, max_tokens=None):
     """Calls LLM with fallback models and retry logic."""
     for model in models:
-        try:
-            params = {
-                "model": model,
-                "messages": messages,
-                "temperature": temperature,
-                "timeout": timeout,
-            }
-            if max_tokens:
-                params["max_tokens"] = max_tokens
-                
-            resp = await client.chat.completions.create(**params)
-            content = resp.choices[0].message.content.strip()
-            # Basic cleanup of markdown
-            content = re.sub(r'```[a-z]*\n?', '', content).strip('`').strip()
-            if content:
-                return content
-        except Exception as e:
-            logger.warning(f"LLM call failed for {model}: {e}")
-            continue
+        for attempt in range(2): # Try each model up to 2 times
+            try:
+                params = {
+                    "model": model,
+                    "messages": messages,
+                    "temperature": temperature,
+                    "timeout": timeout,
+                }
+                if max_tokens:
+                    params["max_tokens"] = max_tokens
+                    
+                resp = await client.chat.completions.create(**params)
+                content = resp.choices[0].message.content.strip()
+                # Basic cleanup of markdown
+                content = re.sub(r'```[a-z]*\n?', '', content).strip('`').strip()
+                if content:
+                    return content
+            except Exception as e:
+                err_str = str(e).lower()
+                if "429" in err_str or "rate limit" in err_str:
+                    logger.warning(f"Rate limited on {model}, attempt {attempt+1}. Switching/Retrying...")
+                    if attempt == 0:
+                        await asyncio.sleep(1) # Small pause before retry
+                        continue
+                logger.warning(f"LLM call failed for {model}: {e}")
+                break # Try next model
     return None
 
 async def _extract_meals(user_text: str, fast_models: list) -> list:
@@ -496,6 +503,61 @@ def _pick_destination_by_keywords(user_text: str, destinations: list) -> str | N
                     return d
     return None
 
+def _fallback_hotel_extraction(user_text: str, candidate_hotels: list) -> list:
+    """Non-LLM fallback: finds hotels by simple string matching/overlap when LLM fails."""
+    if not candidate_hotels:
+        return []
+    
+    # Pre-normalize the user text for better matching
+    def normalize_for_fallback(t: str) -> str:
+        t = t.lower()
+        replacements = {
+            "blucia": "bluesea", "blusea": "bluesea", "блю сі": "bluesea", "блюсі": "bluesea",
+            "бі джей": "bj", "бі джи": "bg", "би джей": "bj",
+            "blaucel": "bluesea", "багамас": "bahamas", "casta": "costa", "calla": "cala",
+            "mediadia": "mediodia", "globalis": "globales"
+        }
+        for old, new in replacements.items():
+            t = t.replace(old, new)
+        return t
+
+    text_norm = normalize_for_fallback(user_text)
+    text_words = set(re.findall(r'\w+', text_norm))
+    found_hotels = []
+    
+    for h in candidate_hotels:
+        name = h['hotel']
+        # Normalize DB name
+        name_clean = re.sub(r'[3-5]\s*(?:\*|★)', '', name.lower())
+        name_clean = re.sub(r'[^a-z0-9а-яіїєґ\s]', ' ', name_clean)
+        name_norm = normalize_for_fallback(name_clean)
+        name_words = [w for w in re.findall(r'\w+', name_norm) if w not in _NOISE_TOKENS]
+        
+        if not name_words:
+            continue
+            
+        # 1. Check if the full normalized name is in the text
+        if name_norm in text_norm:
+            found_hotels.append(name)
+            continue
+            
+        # 2. Check word overlap (allowing for small errors in names)
+        matches = 0
+        for nw in name_words:
+            if nw in text_words:
+                matches += 1
+            else:
+                # Fuzzy check for each word (expensive but only for name_words)
+                for tw in text_words:
+                    if len(tw) > 3 and nw.startswith(tw[:3]) and difflib.SequenceMatcher(None, nw, tw).ratio() > 0.8:
+                        matches += 1
+                        break
+        
+        if matches / len(name_words) >= 0.65: # Lower threshold for fuzzy word matching
+            found_hotels.append(name)
+            
+    return _dedupe_keep_order(found_hotels)
+
 async def format_tour_message(user_text: str, do_cleanup: bool = False) -> str:
     db = get_hotel_db()
     destinations = list(db.keys())
@@ -587,10 +649,16 @@ async def format_tour_message(user_text: str, do_cleanup: bool = False) -> str:
     # We'll try to extract from the user_text (which might be cleaned) and fallback if needed.
     extracted_hotels = await _do_targeted_extract(user_text)
     
+    if not extracted_hotels:
+        logger.info("LLM extraction failed or returned empty list. Trying fallback search...")
+        extracted_hotels = _fallback_hotel_extraction(user_text, candidate_hotels)
+        if not extracted_hotels:
+             # Try one more time with broader candidate list
+             extracted_hotels = _fallback_hotel_extraction(user_text, relevant_hotels[:200])
+             
     if not extracted_hotels and do_cleanup:
         # If it was a voice message and nothing was found, try extracting from a slightly broader context
-        logger.info("No hotels found in cleaned text, trying targeted extraction again...")
-        # (This is just a fallback, in most cases user_text is already cleaned)
+        logger.info("No hotels found in cleaned text even with fallback.")
     
     # HARD LIMIT: If price_data tells us exactly how many hotels there should be, use it.
     if price_data and price_data.get("hotel_prices"):
