@@ -250,22 +250,31 @@ def get_tax_per_person_per_night(destination: str, stars: int, month: int, num_p
                     continue
                 
                 unit = str(row[5]).strip().lower() if row[5] else ""
-                # Col mapping: 0★→6, 1-2★→7, 3★→8, 4★→9, 5★→10
-                # UPDATE: 1-2 stars now count as "no stars" (0★) as requested
-                col = {0: 6, 1: 6, 2: 6, 3: 8, 4: 9, 5: 10}.get(stars, 9)
+                # Col mapping based on Table 1 and Table 2 logic
+                # For Mallorca (Table 2): 0★→6, 3★→8, 4★→9, 5★→10 (1-2★ maps to 0★ column 6)
+                col_map = {0: 6, 1: 6, 2: 6, 3: 8, 4: 9, 5: 10}
+                
+                # SPECIAL CASE: For Mallorca/Ibiza/Spain, 3* and 4* often have the same rate (3.30 or 0.83)
+                # If we are looking for 3* and it's empty, but 4* is not, we might want to check.
+                # However, usually the table is filled. Let's just use the map.
+                col = col_map.get(stars, 9)
                 rate_val = row[col] if len(row) > col else None
                 
                 try:
-                    # Clean the rate value (sometimes it might have currency symbols or commas)
+                    # Clean the rate value
                     if isinstance(rate_val, str):
-                        rate_val = rate_val.replace(',', '.').replace('€', '').strip()
+                        # Remove '€' and replace ',' with '.'
+                        rate_val = re.sub(r'[^\d.,]', '', rate_val).replace(',', '.')
                     rate = float(rate_val) if rate_val is not None and str(rate_val).strip() != "" else 0.0
                 except (ValueError, TypeError):
                     rate = 0.0
                 
-                # If "за номер / ніч" — divide by people to get per-person rate
+                # UNIT LOGIC: 
+                # "за особу / ніч" (Table 2) -> rate is per person.
+                # "за номер / ніч" (Table 1) -> rate is per room, needs division.
                 if "номер" in unit and num_people > 0:
                     rate = rate / num_people
+                # If unit is "особу", rate is already per person, no change needed.
                 
                 logger.info(f"TAX FOUND: {row_resort} {stars}★ month={month} -> {rate}€/person/night")
                 return rate

@@ -304,7 +304,7 @@ def fuzzy_match_hotel(hotel_name: str, db: list) -> tuple[dict, float]:
             
         # 1. Exact match (after normalization)
         if query == db_name:
-            return h, 1.2 # Bonus for exact normalized match
+            return h, 1.5 # Increased bonus for exact match
 
         # 2. SequenceMatcher score
         ratio = difflib.SequenceMatcher(None, query, db_name).ratio()
