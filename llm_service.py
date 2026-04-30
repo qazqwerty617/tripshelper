@@ -737,9 +737,12 @@ async def format_tour_message(user_text: str, do_cleanup: bool = False, raw_voic
         return destinations[0] if destinations else "Unknown"
 
     # Pass hint about potential count to price extractor
-    price_content = user_text
+    # USE RAW TEXT for price extraction as it's more reliable for numbers
+    price_extraction_text = raw_voice_text if raw_voice_text else user_text
+    
+    price_content = price_extraction_text
     if potential_count > 1:
-        price_content = f"(ВАЖЛИВО: Я очікую {potential_count} готелів)\n{user_text}"
+        price_content = f"(ВАЖЛИВО: Я очікую {potential_count} готелів)\n{price_extraction_text}"
 
     price_task = asyncio.create_task(extract_prices_from_text(price_content, fast_models))
     dest_task = asyncio.create_task(_detect_destination(hotel_search_text))
