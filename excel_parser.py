@@ -200,7 +200,8 @@ def get_tax_per_person_per_night(destination: str, stars: int, month: int, num_p
                 
                 unit = str(row[5]).strip().lower() if row[5] else ""
                 # Col mapping: 0★→6, 1-2★→7, 3★→8, 4★→9, 5★→10
-                col = {0: 6, 1: 7, 2: 7, 3: 8, 4: 9, 5: 10}.get(stars, 9)
+                # UPDATE: 1-2 stars now count as "no stars" (0★) as requested
+                col = {0: 6, 1: 6, 2: 6, 3: 8, 4: 9, 5: 10}.get(stars, 9)
                 rate_val = row[col] if len(row) > col else None
                 
                 try:
