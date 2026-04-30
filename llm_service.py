@@ -69,61 +69,75 @@ _EXTRACT_PROMPT = """Ти — спеціалізований AI-асистент
 Твоє завдання: знайти у тексті менеджера ВСІ згадані готелі і зіставити їх з наданим списком з бази.
 
 ПРАВИЛА:
-1. Використовуй ТІЛЬКИ назви з наданого "СПИСКУ ГОТЕЛІВ НАПРЯМКУ".
-2. ЗВЕРТАЙ УВАГУ НА НУМЕРАЦІЮ ТА ПОРЯДОК: Якщо в тексті є "1 готель... 2 готель... 3 готель... і так далі до 8", ти ПОВИНЕН витягти ВСІ 8 готелів у правильному порядку.
-3. НЕ ЗАМІНЮЙ ГОТЕЛІ на інші.
-4. Якщо менеджер назвав готель, якого немає в списку — поверни ТУ САМУ ідентичну назву, яку надав менеджер. 
-5. КІЛЬКІСТЬ: Поверни РІВНО стільки готелів, скільки вказано в тексті. Не зупиняйся після 2-3 варіантів! 
-   Якщо в тексті 7 готелів — поверни 7. Якщо 8 — поверни 8. Це критично!
-6. ФОРМАТ: Тільки JSON {"hotels": ["Hotel 1", "Hotel 2", "Hotel 3", "Hotel 4", "Hotel 5", "Hotel 6", "Hotel 7", "Hotel 8"]}. Жодного іншого тексту.
+1. Використовуй ТІЛЬКИ назви з наданого "СПИСКУ ГОТЕЛІВ НАПРЯМКУ". Якщо менеджер назвав готель, якого немає в списку — спробуй знайти максимально схожий за звучанням у цьому списку.
+2. ЗАБОРОНЕНО вигадувати назви готелів, яких немає в базі, якщо є хоча б приблизний збіг.
+3. ПОРЯДОК ТА КІЛЬКІСТЬ: Повертай готелі рівно в тому порядку, в якому вони йдуть у тексті.
+4. СТРОГИЙ ЛІМІТ: Якщо менеджер назвав 11 готелів — у списку має бути РІВНО 11 готелів. Не додавай зайвого.
+5. ФОРМАТ: Тільки JSON {"hotels": ["Name 1", "Name 2"]}. Жодного іншого тексту.
 
-КРИТИЧНО: Якщо в тексті 7-8 готелів, у твоєму JSON має бути список із 7-8 елементів. Перевір себе перед відповіддю!
+КРИТИЧНО: Будь ласка, будь дуже уважним до назв. Ти МАЄШ вибрати готель із наданого списку, навіть якщо менеджер вимовив його з сильною помилкою.
 """
 
 _EXTRACT_PRICES_PROMPT = """Ти — фінансовий аналітик туристичних турів. 
 Твоє завдання: витягти числові дані для розрахунку.
 
 ПРАВИЛА:
-1. adults, children, infants: кількість людей.
-2. nights: кількість ночей.
-3. check_in_month, check_in_day: дата заїзду.
-4. flight_per_person: ціна авіа НА ОДНУ особу. 
-5. hotel_prices: список ЗАГАЛЬНИХ цін за проживання. 
-   - ВАЖЛИВО: Знайди УСІ згадані готелі та ціни до них. Якщо в тексті 7-8 готелів, у масиві hotel_prices має бути РІВНО 7-8 чисел.
-   - Шукай паттерни типу "1 готель... 1200", "2 варіант... 1350" або просто список назв із цінами поруч.
-   - Не обмежуйся першими двома варіантами!
-6. hotel_stars: зірковість кожного готелю (0, 3, 4, 5). Якщо не вказано — 0.
-7. other_per_person: інші витрати на особу.
+1. adults: кількість дорослих.
+2. children: кількість дітей.
+3. nights: кількість ночей.
+4. check_in_month: номер місяця (1-12).
+5. check_in_day: число місяця.
+6. flight_per_person: ціна авіа НА ОДНУ особу. Якщо вказано загальну суму — розділи її на всіх людей.
+7. hotel_prices: список ЗАГАЛЬНИХ цін за номер для кожного готелю (в тому ж порядку, що в тексті).
+8. hotel_stars: зірковість кожного готелю (0, 3, 4, 5).
+9. other_per_person: інші витрати на особу.
 
-ФОРМАТ: Тільки JSON {"adults": 2, "children": 1, ...}.
-КРИТИЧНО: Не пропускай жодного готелю. Якщо вказано 8 готелів — у масиві hotel_prices має бути 8 чисел.
+ФОРМАТ: Тільки JSON.
+КРИТИЧНО: Якщо вказано "Ціни: 500, 600, 700" — це ціни трьох готелів. Витягни їх всі.
 """
 
-_FORMAT_PROMPT = """Ти — професійний тревел-дизайнер. Твоє завдання: написати вступну частину повідомлення та блок рекомендацій.
+_FORMAT_PROMPT = """Ти — професійний тревел-дизайнер. Твоє завдання: створити СУВОРО ОДНАКОВУ за структурою підбірку турів.
 
-БЛОК 1: ВСТУП (ПРИКЛАД):
-Авіатур до Майорки 🇪🇸
-Із Берліна 🇩🇪
-🌤️ 15.06 - 25.06, 10 ночей
-Туди 22:10
-Назад 15:35
+СТРУКТУРА ПОВІДОМЛЕННЯ (НЕ ЗМІНЮЙ):
+Авіатур [на/до] [Напрямок] [Прапор]
+Із [Місто] [Прапор]
+🌤️ [Дати], [Ночі] ночей
+Туди [Повний час або інтервал, наприклад 18:00 - 19:30]
+Назад [Повний час или інтервал, наприклад 06:00 - 08:30]
 🧳 ручна поклажа до 10 кг та розміром 20х40х30 см
+[Додаткові послуги: трансфер/багаж/екскурсії — тільки якщо вказано]
 
-БЛОК 2: РЕКОМЕНДАЦІЇ (ОБОВ'ЯЗКОВО):
-- Оберіть ТІЛЬКИ 2-3 найкращих готелі з наданого списку. НЕ БІЛЬШЕ.
-- Для кожного обраного готелю напишіть переконливий опис (400-600 символів).
-- Пишіть емоційно, від першої особи, підкреслюючи переваги.
-- Формат:
-**[Назва готелю] [Зірки]**
-[Ваш текст опису]
-(порожній рядок між рекомендаціями)
+🏠 варіанти проживання:
 
-ПРАВИЛА:
-1. Поверни ТІЛЬКИ Вступ та Рекомендації.
-2. Використовуй роздільник "===END_INTRO===" між Вступом та Рекомендаціями.
-3. СУВОРО ЗАБОРОНЕНО: Не пиши нумерований список готелів (1, 2, 3...) та типи харчування у вступі. Тільки заголовок та деталі перельоту.
-4. НЕ ПИШИ ціни — я додам їх сам.
-5. НЕ ПИШИ фразу "Ціна актуальна..." — я додам її сам.
+[Список готелів]
+1) [Назва з бази] [Зірки 3★/4★/5★]
+🥑 [харчування з малої літери]
+[Посилання з бази]
+
+... (всі готелі по черзі)
+
+✔️ путівник + тур страхування
+🤓 онлайн підтримка 24/7
+[Рядок з цінами]
+
+❗️Ціна актуальна на момент розрахунку подорожі
+
+[Блок рекомендацій: ТІЛЬКИ 2-3 готелі, каждый з нового абзацу через порожній рядок]
+
+КРИТИЧНІ ПРАВИЛА:
+1. ПОРЯДОК: Готелі в списку "варіанти проживання" та ціни в рядку 💰 МАЮТЬ відповідати один одному за номером.
+2. ЦІНИ: Використовуй ТІЛЬКИ готові ціни з блоку "РОЗРАХОВАНІ ЦІНИ". Формат: 💰 загальна вартість туру за особу - 1)400€, 2)450€...
+3. ЗІРКИ: Став зірки (3★, 4★, 5★) ЗАВЖДИ, якщо вони є в базі. Якщо в базі вказано (ЗІРКИ: 4★) — ти ОБОВ'ЯЗКОВО маєш написати 4★ поруч із назвою готелю.
+4. ХАРЧУВАННЯ: Для кожного готелю обов'язково вказуй харчування після значка 🥑.
+   - Використовуй тільки: "сніданки", "сніданки + вечері", "повний пансіон", "все включено", "ультра все включено", "без харчування".
+   - Якщо в блоці "ТИПИ ХАРЧУВАННЯ" вказано "напівпансіон" — ЗАМІНИ на "сніданки + вечері".
+5. МОВА: Весь текст УКРАЇНСЬКОЮ, назви готелів — АНГЛІЙСЬКОЮ (як у базі).
+6. ОДНАКОВІСТЬ: Кожне твоє повідомлення має виглядати ідентично за структурою.
+
+РЕКОМЕНДАЦІЇ (ВАЖЛИВО):
+- Обирай 2-3 найкращих готелі.
+- Для кожного готелю пиши розгорнуту рекомендацію від першої особи (як експерт-турагент).
+- ОБСЯГ: 400-600 символів на кожен готель.
 """
 
 def calculate_tour_prices(hotel_prices: list, flight_per_person: float,
@@ -134,14 +148,14 @@ def calculate_tour_prices(hotel_prices: list, flight_per_person: float,
         hotel_per_person = hotel_total / total_people if total_people > 0 else hotel_total
         cost = hotel_per_person + flight_per_person + other_per_person + tourist_tax_per_person
         
-        # Markup logic
+        # Markup logic from April 28th
         if cost < 350:
             final_per_person = cost + 150
         else:
             final_per_person = cost * 1.43
         
-        # Round to nearest 5 for a cleaner look
-        final_per_person = round(final_per_person / 5) * 5
+        # Original rounding from April 28th
+        final_per_person = round(final_per_person) + 5
         
         if has_children:
             results.append(round(final_per_person * total_people))
@@ -929,10 +943,10 @@ async def format_tour_message(user_text: str, do_cleanup: bool = False, raw_voic
         matched_info.append(f"- Назва: {display_name}, Зірки: {stars or 'не вказувати'}, Посилання: {match['link']}")
         hotel_link_map[display_name.lower()] = match['link']
         
-    db_text = "\n".join(matched_info) if matched_info else "Не вдалося витягнути готелі."
-    
     price_label = "💰 загальна вартість туру за особу"
     computed_prices = []
+    has_children = False
+
     if price_data and price_data.get("hotel_prices") and price_data.get("flight_per_person") is not None:
         adults = _safe_int(price_data.get("adults"), 2)
         children = _safe_int(price_data.get("children"), 0)
@@ -952,11 +966,11 @@ async def format_tour_message(user_text: str, do_cleanup: bool = False, raw_voic
             other = float(re.sub(r'[^\d.]', '', other_raw.replace(',', '.')) or 0)
         except Exception: pass
         
-        hotel_prices = []
+        hotel_prices_raw = []
         for p in (price_data.get("hotel_prices") or []):
             try:
                 p_clean = re.sub(r'[^\d.]', '', str(p).replace(',', '.'))
-                if p_clean: hotel_prices.append(float(p_clean))
+                if p_clean: hotel_prices_raw.append(float(p_clean))
             except Exception: pass
             
         nights = _safe_int(price_data.get("nights"), 7)
@@ -964,15 +978,14 @@ async def format_tour_message(user_text: str, do_cleanup: bool = False, raw_voic
         hotel_stars_list = price_data.get("hotel_stars") or []
 
         # Ensure hotel_prices has enough elements to match matched_hotels
-        if len(hotel_prices) < len(matched_hotels):
-            last_price = hotel_prices[-1] if hotel_prices else 0
-            while len(hotel_prices) < len(matched_hotels):
-                hotel_prices.append(last_price)
+        if len(hotel_prices_raw) < len(matched_hotels):
+            last_p = hotel_prices_raw[-1] if hotel_prices_raw else 0
+            while len(hotel_prices_raw) < len(matched_hotels):
+                hotel_prices_raw.append(last_p)
         
-        # Limit to matched_hotels count
-        hotel_prices = hotel_prices[:len(matched_hotels)]
+        hotel_prices_raw = hotel_prices_raw[:len(matched_hotels)]
         
-        for idx, hotel_total in enumerate(hotel_prices):
+        for idx, hotel_total in enumerate(hotel_prices_raw):
             db_stars_str = _extract_allowed_stars(matched_hotels[idx]['hotel']) if idx < len(matched_hotels) else ""
             if db_stars_str:
                 m_stars = re.search(r'\d', db_stars_str)
@@ -981,140 +994,50 @@ async def format_tour_message(user_text: str, do_cleanup: bool = False, raw_voic
                 stars_val = int(hotel_stars_list[idx]) if idx < len(hotel_stars_list) else 0
             
             tax_per_night = get_tax_per_person_per_night(selected_dest or "", stars_val, month, total_people)
-            # TAX RULE: Only adults pay tax (approximate logic for Mallorca/Spain)
-            # We calculate total tax for adults and distribute it per person in the final display
             total_tax_for_stay = tax_per_night * nights * adults
             tax_per_person_share = total_tax_for_stay / total_people if total_people > 0 else 0
             
-            # MATH LOGIC:
-            # 1. Base cost per person (WITHOUT TAX)
+            # MATH LOGIC FROM APRIL 28TH:
             hotel_per_person = hotel_total / total_people if total_people > 0 else hotel_total
             base_cost_no_tax = hotel_per_person + flight + other
             
-            # 2. Markup (Margin) applied ONLY to net cost
             if base_cost_no_tax < 350:
                 final_no_tax = base_cost_no_tax + 150
             else:
                 final_no_tax = base_cost_no_tax * 1.43
             
-            # 3. Add tax AFTER markup (tax is not a subject for margin)
             final = final_no_tax + tax_per_person_share
-                
-            # Round to nearest 5
-            final = round(final / 5) * 5
+            final = round(final) + 5
             
-            logger.info(f"CALC: Hotel={matched_hotels[idx]['hotel'] if idx < len(matched_hotels) else '?'}, PriceIn={hotel_total}, Flight={flight}, TaxShare={tax_per_person_share}, Base={base_cost_no_tax}, Final={final}")
-            
-            # For children/infants, we usually show total price for everyone
             if has_children:
-                total_tour_price = round(final * total_people)
-                computed_prices.append(total_tour_price)
+                computed_prices.append(round(final * total_people))
             else:
                 computed_prices.append(final)
         
         price_label = "💰 загальна вартість туру за всіх" if has_children else "💰 загальна вартість туру за особу"
-        prices_block = f"\n\nРОЗРАХОВАНІ ЦІНИ:\n{price_label} - {', '.join([f'{i+1}){p}€' for i, p in enumerate(computed_prices)])}"
-    else:
-        prices_block = "\n\nЦІНА НЕ ВКАЗАНА: у блоці 💰 напиши 'не вказано' для всіх готелів."
 
-    # Prepare meals list (align with matched_hotels)
-    # Even if extracted_meals is empty, we provide a default list to ensure LLM doesn't hallucinate
-    meals_list = []
-    for i in range(len(matched_hotels)):
-        if extracted_meals and i < len(extracted_meals):
-            meals_list.append(extracted_meals[i])
-        else:
-            meals_list.append("не вказано")
-    
-    meals_str = ", ".join([f"{i+1}) {m}" for i, m in enumerate(meals_list)])
-    meals_block = f"\n\nТИПИ ХАРЧУВАННЯ (використовуй ці дані для кожного готелю СУВОРО за номером):\n{meals_str}"
-
-    # Construct numbered hotels block with EXPLICIT star mention to help the LLM
-    hotels_with_stars = []
+    # Prepare data for LLM formatting
+    hotels_info = []
     for i, h in enumerate(matched_hotels):
         stars = _extract_allowed_stars(h['hotel'])
-        hotels_with_stars.append(f"{i+1}. {h['hotel']} (ЗІРКИ: {stars if stars else 'немає'}) | {h['link']}")
+        meal = extracted_meals[i] if extracted_meals and i < len(extracted_meals) else "не вказано"
+        price = computed_prices[i] if i < len(computed_prices) else "не вказано"
+        hotels_info.append(f"{i+1}) {h['hotel']} (ЗІРКИ: {stars if stars else 'немає'}) | Харчування: {meal} | Посилання: {h['link']} | ЦІНА: {price}€")
     
-    numbered_hotels_block = "\n".join(hotels_with_stars)
-    combined = f"ТЕКСТ ВІД МЕНЕДЖЕРА:\n{user_text}\n\nЗНАЙДЕНІ В БАЗІ ГОТЕЛІ (ВСЬОГО {len(matched_hotels)}, ВИКОРИСТОВУЙ ВСІ):\n{numbered_hotels_block}\n\nДЕТАЛЬНА ІНФОРМАЦІЯ:\n{db_text}{prices_block}{meals_block}"
+    db_text = "\n".join(hotels_info)
     
+    combined_content = f"ТЕКСТ МЕНЕДЖЕРА:\n{user_text}\n\nНАПРЯМОК: {selected_dest}\n\n"
+    combined_content += f"БАЗА ГОТЕЛІВ ТА ЦІНИ (ВИКОРИСТОВУЙ ВСЕ):\n{db_text}\n\n"
+    combined_content += f"РОЗРАХОВАНІ ЦІНИ (ДЛЯ РЯДКА З ЦІНАМИ):\n{price_label} - {', '.join([f'{i+1}){p}€' for i, p in enumerate(computed_prices)])}"
+
     result = await _call_llm_with_retry(
-        messages=[{"role": "system", "content": _FORMAT_PROMPT}, {"role": "user", "content": combined}],
+        messages=[{"role": "system", "content": _FORMAT_PROMPT}, {"role": "user", "content": combined_content}],
         models=smart_models,
         timeout=90,
-        max_tokens=2500
+        max_tokens=3000
     )
     
-    # Prepare meals alignment for the programmatic block
-    hotel_meal_list = []
-    for i in range(len(matched_hotels)):
-        if extracted_meals and i < len(extracted_meals):
-            hotel_meal_list.append(extracted_meals[i])
-        else:
-            hotel_meal_list.append("не вказано")
-
     if result:
-        # 1. Start with the LLM-generated intro and recommendations
-        # (We assume LLM followed the instruction to provide Intro and Recommendations)
-        
-        # 2. Build the "Options" block programmatically (100% precision)
-        options_block = "\n🏠 варіанти проживання:\n\n"
-        for i, hotel_data in enumerate(matched_hotels, 1):
-            name = hotel_data['hotel']
-            # Link mapping: use the exact name as stored in matched_hotels
-            link = hotel_link_map.get(name.lower(), "Посилання відсутнє ⚠️")
-            meal = hotel_meal_list[i-1] # Use the prepared list
-            
-            options_block += f"{i}) {name}\n"
-            options_block += f"🥑 {meal}\n"
-            options_block += f"{link}\n\n"
-            
-        # 3. Build the "Footer" block programmatically
-        footer_block = "✔️ путівник + тур страхування\n"
-        footer_block += "🤓 онлайн підтримка 24/7\n"
-        footer_block += f"{price_label} - "
-        
-        price_strings = []
-        for i, p in enumerate(computed_prices, 1):
-            price_strings.append(f"{i}){p}€")
-        footer_block += ", ".join(price_strings) + "\n\n"
-        footer_block += "❗️Ціна актуальна на момент розрахунку подорожі\n\n"
-
-        # 4. Assemble the final message
-        # Split LLM result into Intro and Recommendations using the delimiter
-        if "===END_INTRO===" in result:
-            parts = result.split("===END_INTRO===")
-            intro = parts[0].strip()
-            recommendations_raw = parts[1].strip()
-        else:
-            # Fallback if LLM didn't use the delimiter
-            lines = result.split("\n")
-            intro_lines = []
-            recommendation_lines = []
-            is_recommendation = False
-            for line in lines:
-                if "**" in line and not is_recommendation:
-                    is_recommendation = True
-                if is_recommendation:
-                    recommendation_lines.append(line)
-                else:
-                    intro_lines.append(line)
-            intro = "\n".join(intro_lines).strip()
-            recommendations_raw = "\n".join(recommendation_lines).strip()
-        
-        # Programmatically limit recommendations to 3
-        rec_parts = re.split(r'\n(?=\*\*)', recommendations_raw)
-        recommendations = "\n".join(rec_parts[:3]).strip()
-        
-        # Assemble: Intro -> Options -> Footer -> Recommendations
-        final_message = f"{intro}\n{options_block}{footer_block}\n{recommendations}"
-        
-        # Final cleanup of multiple newlines and extra symbols
-        final_message = re.sub(r'\n{3,}', '\n\n', final_message).strip()
-        final_message = final_message.replace("===END_INTRO===", "").strip()
-        
-        return final_message
+        return re.sub(r'\n{3,}', '\n\n', result).strip()
     
     return "❌ Помилка генерації тексту."
-
-    return "❌ Помилка розпізнавання (обидва сервіси недоступні)."
