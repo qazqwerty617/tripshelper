@@ -23,8 +23,9 @@ client = AsyncOpenAI(
 )
 
 _NOISE_TOKENS = {
-    "hotel", "hotels", "apartments", "apartment", "resort", "spa",
-    "villas", "villa", "the", "by", "and", "suites", "suite",
+    "hotel", "hotels", "apartments", "apartment", "apartamentos", "apartamento",
+    "resort", "spa", "villas", "villa", "the", "by", "and", "suites", "suite",
+    "hostal", "pension", "boutique", "park", "garden", "beach", "club",
 }
 
 _DESTINATION_ALIASES = {
@@ -276,12 +277,14 @@ def fuzzy_match_hotel(hotel_name: str, db: list) -> tuple[dict, float]:
         
         # Replace common transcription errors and synonyms
         replacements = {
-            "blucia": "bluesea", "blusea": "bluesea", "блю сі": "bluesea", "блюсі": "bluesea",
-            "бі джей": "bj", "бі джи": "bg", "би джей": "bj",
-            "blaucel": "bluesea", "багамас": "bahamas",
+            "blucia": "bluesea", "blusia": "bluesea", "bluesee": "bluesea", "блю сі": "bluesea", "блюсі": "bluesea",
+            "бі джей": "bj", "бі джи": "bg", "би джей": "bj", "би джи": "bg", "біджей": "bj", "плеймар": "playamar",
+            "playmar": "playamar", "blaucel": "bluesea", "багамас": "bahamas",
             "іберостар": "iberostar", "ріксос": "rixos", "мітсіс": "mitsis",
             "глікотель": "grecotel", "грекотель": "grecotel", "соль": "sol", "мелія": "melia",
-            "хсм": "hsm", "бг": "bg", "біджей": "bj"
+            "хсм": "hsm", "бг": "bg", "каста": "costa", "калла": "cala", "calla": "cala", "міллер": "millor",
+            "miller": "millor", "медіадіа": "mediodia", "mediadia": "mediodia", "глобаліс": "globales",
+            "globalis": "globales", "ізабель": "isabel", "азулін": "azuline"
         }
         
         for old, new in replacements.items():
@@ -342,14 +345,16 @@ def fuzzy_match_hotel(hotel_name: str, db: list) -> tuple[dict, float]:
             score -= 0.1
 
         # Strong bonus for high word overlap
-        if overlap_ratio >= 0.9:
-            score += 0.5
+        if overlap_ratio >= 0.8:
+            score += 0.4
+        elif overlap_ratio >= 0.5:
+            score += 0.2
             
         if score > max_score:
             max_score = score
             best_match = h
             
-    if best_match and max_score > 0.7: 
+    if best_match and max_score > 0.65: # Lowered from 0.7 to 0.65
         return best_match, max_score
         
     return {"hotel": hotel_name, "link": "Посилання відсутнє ⚠️"}, 0.0
@@ -537,10 +542,11 @@ def _fallback_hotel_extraction(user_text: str, candidate_hotels: list) -> list:
     def normalize_for_fallback(t: str) -> str:
         t = t.lower()
         replacements = {
-            "blucia": "bluesea", "blusea": "bluesea", "блю сі": "bluesea", "блюсі": "bluesea",
-            "бі джей": "bj", "бі джи": "bg", "би джей": "bj",
-            "blaucel": "bluesea", "багамас": "bahamas", "casta": "costa", "calla": "cala",
-            "mediadia": "mediodia", "globalis": "globales"
+            "blucia": "bluesea", "blusia": "bluesea", "bluesee": "bluesea", "блю сі": "bluesea", "блюсі": "bluesea",
+            "бі джей": "bj", "бі джи": "bg", "би джей": "bj", "би джи": "bg", "біджей": "bj", "плеймар": "playamar",
+            "playmar": "playamar", "blaucel": "bluesea", "багамас": "bahamas", "casta": "costa", "calla": "cala",
+            "mediadia": "mediodia", "globalis": "globales", "ізабель": "isabel", "азулін": "azuline",
+            "каста": "costa", "калла": "cala", "міллер": "millor", "медіадіа": "mediodia", "глобаліс": "globales"
         }
         for old, new in replacements.items():
             t = t.replace(old, new)
