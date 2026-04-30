@@ -75,9 +75,9 @@ _EXTRACT_PROMPT = """Ти — спеціалізований AI-асистент
 4. Якщо менеджер назвав готель, якого немає в списку — поверни ТУ САМУ ідентичну назву, яку надав менеджер. 
 5. КІЛЬКІСТЬ: Поверни РІВНО стільки готелів, скільки вказано в тексті. Не зупиняйся після 2-3 варіантів! 
    Якщо в тексті 7 готелів — поверни 7. Якщо 8 — поверни 8. Це критично!
-6. ФОРМАТ: Тільки JSON {"hotels": ["Name 1", "Name 2", "Name 3", ...]}. Жодного іншого тексту.
+6. ФОРМАТ: Тільки JSON {"hotels": ["Hotel 1", "Hotel 2", "Hotel 3", "Hotel 4", "Hotel 5", "Hotel 6", "Hotel 7", "Hotel 8"]}. Жодного іншого тексту.
 
-КРИТИЧНО: Якщо в тексті 7 готелів, у твоєму JSON має бути список із 7 елементів. Перевір себе перед відповіддю!
+КРИТИЧНО: Якщо в тексті 7-8 готелів, у твоєму JSON має бути список із 7-8 елементів. Перевір себе перед відповіддю!
 """
 
 _EXTRACT_PRICES_PROMPT = """Ти — фінансовий аналітик туристичних турів. 
@@ -363,22 +363,41 @@ def fuzzy_match_hotel(hotel_name: str, db: list) -> tuple[dict, float]:
         
     return {"hotel": hotel_name, "link": "Посилання відсутнє ⚠️"}, 0.0
 
-def _build_hotel_candidates(user_text: str, relevant_hotels: list, limit: int = 140) -> list:
+def _build_hotel_candidates(user_text: str, relevant_hotels: list, limit: int = 150) -> list:
     if len(relevant_hotels) <= limit:
         return relevant_hotels
+    
     text_norm = re.sub(r'[^a-z0-9а-яіїєґ\s]', ' ', user_text.lower())
     text_norm = re.sub(r'\s+', ' ', text_norm).strip()
     text_words = set(re.findall(r'\w+', text_norm))
+    
+    # Filter out noise from text words for scoring
+    text_words_clean = text_words - _NOISE_TOKENS
+    
     scored = []
     for hotel in relevant_hotels:
         name = hotel.get("hotel", "")
         name_norm = re.sub(r'[^a-z0-9а-яіїєґ\s]', ' ', name.lower())
         name_norm = re.sub(r'\s+', ' ', name_norm).strip()
         hotel_words = set(re.findall(r'\w+', name_norm))
-        overlap = len(hotel_words & text_words)
+        hotel_words_clean = hotel_words - _NOISE_TOKENS
+        
+        if not hotel_words_clean:
+            scored.append((0, hotel))
+            continue
+            
+        overlap = len(hotel_words_clean & text_words_clean)
+        
+        # Brands match
+        brand_overlap = len(hotel_words & BRANDS & text_words)
+        
+        # Sequence ratio for fuzzy parts
         ratio = difflib.SequenceMatcher(None, text_norm, name_norm).ratio()
-        score = overlap * 2 + ratio
+        
+        # Weighted score: overlap is most important, then brands
+        score = overlap * 5 + brand_overlap * 3 + ratio * 2
         scored.append((score, hotel))
+        
     scored.sort(key=lambda x: x[0], reverse=True)
     return [h for _, h in scored[:limit]]
 
@@ -569,38 +588,49 @@ def _fallback_hotel_extraction(user_text: str, candidate_hotels: list) -> list:
     # Sort hotels by length descending to match longer names first (e.g. "Hotel Brand Name" before "Hotel Brand")
     sorted_candidates = sorted(candidate_hotels, key=lambda x: len(x['hotel']), reverse=True)
     
+    # 1. Check if the full normalized name is in the text
+    # Prioritize exact matches first
+    exact_matches = []
     for h in sorted_candidates:
         name = h['hotel']
-        # Normalize DB name
+        name_clean = re.sub(r'[1-5]\s*(?:\*|★)', '', name.lower())
+        name_clean = re.sub(r'[^a-z0-9а-яіїєґ\s]', ' ', name_clean)
+        name_norm = normalize_for_fallback(name_clean)
+        
+        if len(name_norm) > 5 and name_norm in text_norm:
+            exact_matches.append(name)
+            
+    # 2. Check word overlap for the rest
+    fuzzy_matches = []
+    for h in sorted_candidates:
+        name = h['hotel']
+        if name in exact_matches: continue
+        
         name_clean = re.sub(r'[1-5]\s*(?:\*|★)', '', name.lower())
         name_clean = re.sub(r'[^a-z0-9а-яіїєґ\s]', ' ', name_clean)
         name_norm = normalize_for_fallback(name_clean)
         name_words = [w for w in re.findall(r'\w+', name_norm) if w not in _NOISE_TOKENS]
         
-        if not name_words:
-            continue
+        if not name_words: continue
             
-        # 1. Check if the full normalized name is in the text
-        if name_norm in text_norm:
-            found_hotels.append(name)
-            continue
-            
-        # 2. Check word overlap (allowing for small errors in names)
         matches = 0
         for nw in name_words:
             if nw in text_words:
                 matches += 1
             else:
-                # Fuzzy check for each word (expensive but only for name_words)
                 for tw in text_words:
                     if len(tw) > 3 and nw.startswith(tw[:3]) and difflib.SequenceMatcher(None, nw, tw).ratio() > 0.8:
                         matches += 1
                         break
         
-        if matches / len(name_words) >= 0.70: # Increased slightly for better precision
-            found_hotels.append(name)
+        if matches / len(name_words) >= 0.75: 
+            fuzzy_matches.append(name)
             
-    return _dedupe_keep_order(found_hotels)
+    # Sort by appearance in text
+    all_found = exact_matches + fuzzy_matches
+    all_found.sort(key=lambda name: text_norm.find(normalize_for_fallback(re.sub(r'[^a-z0-9а-яіїєґ\s]', ' ', name.lower()))))
+    
+    return _dedupe_keep_order(all_found)
 
 def _count_potential_hotels(text: str) -> int:
     """Estimates how many hotels are mentioned based on numbering patterns."""
@@ -639,8 +669,8 @@ async def format_tour_message(user_text: str, do_cleanup: bool = False, raw_voic
 
     selected_dest = _pick_destination_by_keywords(hotel_search_text_cleaned, destinations)
     
-    fast_models = ["openai/gpt-5.4-mini", "google/gemini-2.5-flash"]
-    smart_models = ["openai/gpt-5.4-mini", "google/gemini-2.5-flash"]
+    fast_models = ["openai/gpt-4o-mini", "google/gemini-flash-1.5"]
+    smart_models = ["openai/gpt-4o-mini", "google/gemini-flash-1.5"]
     
     start_time = asyncio.get_event_loop().time()
 
@@ -706,8 +736,8 @@ async def format_tour_message(user_text: str, do_cleanup: bool = False, raw_voic
     relevant_hotels = db.get(selected_dest, [])
     
     # Enable smart candidate filtering for large databases (Crete, Mallorca, etc.)
-    # High-quality matches will always be in the top 100.
-    candidate_hotels = _build_hotel_candidates(hotel_search_text_cleaned, relevant_hotels, limit=60)
+    # High-quality matches will always be in the top 150.
+    candidate_hotels = _build_hotel_candidates(hotel_search_text_cleaned, relevant_hotels, limit=150)
     
     # --- NEW: STRICT DIRECT MATCHING PHASE ---
     # Before asking LLM, let's see if we can find hotels directly by name overlap
@@ -768,7 +798,7 @@ async def format_tour_message(user_text: str, do_cleanup: bool = False, raw_voic
         
         raw = await _call_llm_with_retry(
             messages=[{"role": "system", "content": _EXTRACT_PROMPT}, {"role": "user", "content": extraction_content}],
-            models=["openai/gpt-5.4-mini", "google/gemini-2.5-flash"],
+            models=["openai/gpt-4o-mini", "google/gemini-flash-1.5"],
             timeout=40,
             max_tokens=1000
         )
@@ -780,8 +810,8 @@ async def format_tour_message(user_text: str, do_cleanup: bool = False, raw_voic
                 except: pass
         return []
 
-    # Try extracting from hotel_search_text (which is raw voice if available)
     extracted_hotels = await _do_targeted_extract(hotel_search_text)
+    logger.info(f"LLM extracted {len(extracted_hotels)} hotels: {extracted_hotels}")
     
     if not extracted_hotels or (expected_count > 0 and len(extracted_hotels) < expected_count):
         logger.info(f"LLM extraction found {len(extracted_hotels)} but expected {expected_count}. Trying fallback search...")
@@ -789,10 +819,15 @@ async def format_tour_message(user_text: str, do_cleanup: bool = False, raw_voic
         
         # If fallback found more or better matches, use it
         if len(fallback_hotels) >= expected_count:
+            logger.info(f"Fallback found {len(fallback_hotels)} hotels, which meets expected count.")
+            extracted_hotels = fallback_hotels
+        elif len(fallback_hotels) > len(extracted_hotels):
+            logger.info(f"Fallback found {len(fallback_hotels)} hotels, more than LLM. Using fallback.")
             extracted_hotels = fallback_hotels
         elif not extracted_hotels:
              # Try one more time with broader candidate list
-             extracted_hotels = _fallback_hotel_extraction(hotel_search_text, relevant_hotels[:200])
+             logger.info("Trying broad fallback search...")
+             extracted_hotels = _fallback_hotel_extraction(hotel_search_text, relevant_hotels[:300])
              
     if not extracted_hotels and raw_voice_text:
         # If extraction from raw failed, try the cleaned text as last resort
