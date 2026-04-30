@@ -265,7 +265,7 @@ def fuzzy_match_hotel(hotel_name: str, db: list) -> tuple[dict, float]:
             "глікотель": "grecotel", "грекотель": "grecotel", "соль": "sol", "мелія": "melia",
             "хсм": "hsm", "бг": "bg", "bg": "bj", "каста": "costa", "калла": "cala", "calla": "cala", "міллер": "millor",
             "miller": "millor", "медіадіа": "mediodia", "mediadia": "mediodia", "глобаліс": "globales",
-            "globalis": "globales", "ізабель": "isabel", "азулін": "azuline"
+            "globalis": "globales", "ізабель": "isabel", "азулін": "azuline", "гранд": "grand", "grand": "gran"
         }
         
         for old, new in replacements.items():
@@ -335,7 +335,7 @@ def fuzzy_match_hotel(hotel_name: str, db: list) -> tuple[dict, float]:
             max_score = score
             best_match = h
             
-    if best_match and max_score > 0.75: # Increased from 0.65 to 0.75 for higher precision
+    if best_match and max_score > 0.60: # Lowered from 0.75 to 0.60 per user request for voice matching
         return best_match, max_score
         
     return {"hotel": hotel_name, "link": "Посилання відсутнє ⚠️"}, 0.0
@@ -528,6 +528,7 @@ def _fallback_hotel_extraction(user_text: str, candidate_hotels: list) -> list:
             "playmar": "playamar", "blaucel": "bluesea", "багамас": "bahamas", "casta": "costa", "calla": "cala",
             "mediadia": "mediodia", "globalis": "globales", "ізабель": "isabel", "азулін": "azuline",
             "каста": "costa", "калла": "cala", "міллер": "millor", "медіадіа": "mediodia", "глобаліс": "globales",
+            "гранд": "grand", "grand": "gran",
             "bg": "bj", "bg ": "bj ", " bg": " bj" # Common transcription swap
         }
         for old, new in replacements.items():
@@ -705,7 +706,7 @@ async def format_tour_message(user_text: str, do_cleanup: bool = False) -> str:
 
         if score == 0.0:
             display_name = f"{h_name} ⚠️"
-        elif score < 0.70: # Slightly lower threshold
+        elif score < 0.65: # Threshold for warning emoji (slightly above the 0.60 matching threshold)
             display_name = f"{display_name} ⚠️"
 
         # Force stars from DB if they were extracted
