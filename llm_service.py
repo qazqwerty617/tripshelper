@@ -67,36 +67,32 @@ _EXTRACT_PROMPT = """Ти — спеціалізований AI-асистент
 
 ПРАВИЛА:
 1. Використовуй ТІЛЬКИ назви з наданого "СПИСКУ ГОТЕЛІВ НАПРЯМКУ".
-2. НЕ ЗАМІНЮЙ ГОТЕЛІ на інші. Якщо менеджер написав "Hotel A", а в списку є "Hotel B" — не замінюй їх, якщо вони не є очевидно одним і тим самим готелем (наприклад, різна зірковість або мережа).
-3. Якщо менеджер назвав готель, якого немає в списку — поверни ТУ САМУ ідентичну назву, яку надав менеджер. НЕ ПРИДУМУЙ схожі назви з бази, якщо немає 100% впевненості.
-4. ПОРЯДОК ТА КІЛЬКІСТЬ: Повертай готелі рівно в тому порядку, в якому вони йдуть у тексті. 
-5. СТРОГИЙ ЛІМІТ: Якщо менеджер назвав 11 готелів — у списку має бути РІВНО 11 готелів.
-6. ФОРМАТ: Тільки JSON {"hotels": ["Name 1", "Name 2"]}. Жодного іншого тексту.
+2. ЗВЕРТАЙ УВАГУ НА НУМЕРАЦІЮ: Якщо менеджер каже "Перший... Другий... Третій...", це означає, що там має бути 3 окремих готелі. Не пропускай жодного!
+3. НЕ ЗАМІНЮЙ ГОТЕЛІ на інші. Якщо менеджер написав "Hotel A", а в списку є "Hotel B" — не замінюй їх, якщо вони не є очевидно одним і тим самим готелем.
+4. Якщо менеджер назвав готель, якого немає в списку — поверни ТУ САМУ ідентичну назву, яку надав менеджер. 
+5. ПОРЯДОК ТА КІЛЬКІСТЬ: Повертай готелі рівно в тому порядку, в якому вони йдуть у тексті. 
+6. СТРОГИЙ ЛІМІТ: Кількість готелів у твоєму списку має бути РІВНОЮ кількості готелів, названих менеджером.
+7. ФОРМАТ: Тільки JSON {"hotels": ["Name 1", "Name 2"]}. Жодного іншого тексту.
 
-КРИТИЧНО: Краще повернути оригінальну назву від менеджера, ніж помилково вибрати неправильний готель з бази.
+КРИТИЧНО: Якщо в тексті є "Перший готель: BG Playamar", ти ПОВИНЕН включити його в список першим. Не починай з другого.
 """
 
 _EXTRACT_PRICES_PROMPT = """Ти — фінансовий аналітик туристичних турів. 
 Твоє завдання: витягти числові дані для розрахунку.
 
 ПРАВИЛА:
-1. adults: кількість дорослих.
-2. children: кількість дітей (віком від 2 до 12 років).
-3. infants: кількість немовлят (до 2 років). Якщо вказано "дитина 2 роки", це зазвичай дитина (children), а не немовля (infant).
-4. nights: кількість ночей.
-5. check_in_month: номер місяця (1-12).
-6. check_in_day: число місяця.
-7. flight_per_person: ціна авіа НА ОДНУ особу. 
-   - СУВОРО: Ціна авіа ЗАВЖДИ вважається за ОДНУ особу, якщо тільки менеджер ПРЯМО і ЧІТКО не написав "за всіх" або "загальна сума". 
-   - Якщо написано просто "авіа 410" або "вартість авіа 410" — це ціна за ОДНУ особу. НЕ ДІЛИ її на кількість людей.
-   - Тільки якщо вказано "авіа 1200 за трьох", тоді розділи (1200 / 3 = 400).
-   - Якщо ціна підозріло мала (наприклад, 40 євро), все одно вважати це ціною за особу.
-8. hotel_prices: список ЗАГАЛЬНИХ цін за проживання для кожного готелю за весь період за ВСІХ (в тому ж порядку, що в тексті).
-9. hotel_stars: зірковість кожного готелю (0, 3, 4, 5).
-10. other_per_person: інші витрати на особу (трансфер, страхування тощо).
+1. adults, children, infants: кількість людей.
+2. nights: кількість ночей.
+3. check_in_month, check_in_day: дата заїзду.
+4. flight_per_person: ціна авіа НА ОДНУ особу. 
+5. hotel_prices: список ЗАГАЛЬНИХ цін за проживання. 
+   - ВАЖЛИВО: Кількість цін має СУВОРО збігатися з кількістю готелів у тексті.
+   - Якщо менеджер каже "Перший готель... Другий...", витягуй ціни для КОЖНОГО.
+6. hotel_stars: зірковість кожного готелю (0, 3, 4, 5).
+7. other_per_person: інші витрати на особу.
 
-ФОРМАТ: Тільки JSON {"adults": 2, "children": 1, "infants": 0, "nights": 10, ...}.
-КРИТИЧНО: Будь дуже уважним до вартості авіа. Не діли її на кількість людей, якщо менеджер не вказав, що це загальна сума.
+ФОРМАТ: Тільки JSON {"adults": 2, "children": 1, ...}.
+КРИТИЧНО: Не пропускай жодного готелю. Якщо вказано 8 готелів — у масиві hotel_prices має бути 8 чисел.
 """
 
 _FORMAT_PROMPT = """Ти — професійний тревел-дизайнер. Твоє завдання: написати вступну частину повідомлення та блок рекомендацій.
@@ -245,7 +241,7 @@ async def _extract_meals(user_text: str, fast_models: list) -> list:
 def fuzzy_match_hotel(hotel_name: str, db: list) -> tuple[dict, float]:
     def normalize_name(name: str) -> str:
         # Remove stars from name for better matching
-        cleaned = re.sub(r'[3-5]\s*(?:\*|★)', '', name.lower())
+        cleaned = re.sub(r'[1-5]\s*(?:\*|★)', '', name.lower())
         
         # Simple Transliteration for Ukrainian/Russian names to Latin
         trans_map = {
@@ -259,13 +255,13 @@ def fuzzy_match_hotel(hotel_name: str, db: list) -> tuple[dict, float]:
         # Replace common transcription errors and synonyms
         replacements = {
             "blucia": "bluesea", "blusia": "bluesea", "bluesee": "bluesea", "блю сі": "bluesea", "блюсі": "bluesea",
-            "бі джей": "bj", "бі джи": "bg", "би джей": "bj", "би джи": "bg", "біджей": "bj", "плеймар": "playamar",
+            "бі джей": "bj", "бі джи": "bj", "би джей": "bj", "би джи": "bj", "біджей": "bj", "плеймар": "playamar",
             "playmar": "playamar", "blaucel": "bluesea", "багамас": "bahamas",
             "іберостар": "iberostar", "ріксос": "rixos", "мітсіс": "mitsis",
             "глікотель": "grecotel", "грекотель": "grecotel", "соль": "sol", "мелія": "melia",
-            "хсм": "hsm", "бг": "bg", "bg": "bj", "каста": "costa", "калла": "cala", "calla": "cala", "міллер": "millor",
+            "хсм": "hsm", "бг": "bj", "bg": "bj", "каста": "costa", "калла": "cala", "calla": "cala", "міллер": "millor",
             "miller": "millor", "медіадіа": "mediodia", "mediadia": "mediodia", "глобаліс": "globales",
-            "globalis": "globales", "ізабель": "isabel", "азулін": "azuline", "гранд": "grand", "grand": "gran"
+            "globalis": "globales", "ізабель": "isabel", "азулін": "azuline", "гранд": "gran", "grand": "gran"
         }
         
         for old, new in replacements.items():
@@ -289,6 +285,9 @@ def fuzzy_match_hotel(hotel_name: str, db: list) -> tuple[dict, float]:
         final_tokens = [t for t in cleaned.split() if t not in _NOISE_TOKENS]
         return " ".join(final_tokens)
 
+    # Brands for strict matching
+    BRANDS = {"bluesea", "hipotels", "globales", "iberostar", "rixos", "mitsis", "grecotel", "sol", "melia", "hsm", "azuline", "bj"}
+
     best_match = None
     max_score = 0.0
     query = normalize_name(hotel_name)
@@ -296,6 +295,7 @@ def fuzzy_match_hotel(hotel_name: str, db: list) -> tuple[dict, float]:
         query = hotel_name.lower()
     
     query_words = set(re.findall(r'\w+', query))
+    query_brands = query_words & BRANDS
     
     for h in db:
         db_name_orig = h['hotel']
@@ -312,6 +312,7 @@ def fuzzy_match_hotel(hotel_name: str, db: list) -> tuple[dict, float]:
         
         # 3. Word overlap bonus
         db_words = set(re.findall(r'\w+', db_name))
+        db_brands = db_words & BRANDS
         if not query_words: continue
         
         overlap = len(query_words & db_words)
@@ -320,6 +321,17 @@ def fuzzy_match_hotel(hotel_name: str, db: list) -> tuple[dict, float]:
         # Weighted score: overlap is more important for identifying the right hotel
         score = ratio * 0.2 + overlap_ratio * 0.8
         
+        # BRAND PENALTY/BONUS
+        # If query has a brand, but match has a DIFFERENT brand, apply heavy penalty
+        if query_brands and db_brands and query_brands != db_brands:
+            score -= 1.0 # Increased penalty to prevent cross-brand matching (e.g. Bluesea -> Hipotels)
+        # If query has a brand, but match has NO brand, apply small penalty
+        elif query_brands and not db_brands:
+            score -= 0.3
+        # If both have the SAME brand, apply bonus
+        elif query_brands and db_brands and query_brands == db_brands:
+            score += 0.3
+
         # Penalty for large length difference
         len_diff = abs(len(query) - len(db_name))
         if len_diff > 15: # Stricter length check
@@ -522,13 +534,17 @@ def _fallback_hotel_extraction(user_text: str, candidate_hotels: list) -> list:
     # Pre-normalize the user text for better matching
     def normalize_for_fallback(t: str) -> str:
         t = t.lower()
+        # Remove ordinals and common prefixes
+        t = re.sub(r'\b(перший|другий|третій|четвертий|п’ятий|шостий|сьомий|восьмий|дев’ятий|десятий|одинадцятий|дванадцятий)\b', '', t)
+        t = re.sub(r'\b(готель|отель|номер|варіант)\b', '', t)
+        
         replacements = {
             "blucia": "bluesea", "blusia": "bluesea", "bluesee": "bluesea", "блю сі": "bluesea", "блюсі": "bluesea",
-            "бі джей": "bj", "бі джи": "bg", "би джей": "bj", "би джи": "bg", "біджей": "bj", "плеймар": "playamar",
+            "бі джей": "bj", "бі джи": "bj", "би джей": "bj", "би джи": "bj", "біджей": "bj", "плеймар": "playamar",
             "playmar": "playamar", "blaucel": "bluesea", "багамас": "bahamas", "casta": "costa", "calla": "cala",
             "mediadia": "mediodia", "globalis": "globales", "ізабель": "isabel", "азулін": "azuline",
             "каста": "costa", "калла": "cala", "міллер": "millor", "медіадіа": "mediodia", "глобаліс": "globales",
-            "гранд": "grand", "grand": "gran",
+            "гранд": "gran", "grand": "gran",
             "bg": "bj", "bg ": "bj ", " bg": " bj" # Common transcription swap
         }
         for old, new in replacements.items():
@@ -539,10 +555,13 @@ def _fallback_hotel_extraction(user_text: str, candidate_hotels: list) -> list:
     text_words = set(re.findall(r'\w+', text_norm))
     found_hotels = []
     
-    for h in candidate_hotels:
+    # Sort hotels by length descending to match longer names first (e.g. "Hotel Brand Name" before "Hotel Brand")
+    sorted_candidates = sorted(candidate_hotels, key=lambda x: len(x['hotel']), reverse=True)
+    
+    for h in sorted_candidates:
         name = h['hotel']
         # Normalize DB name
-        name_clean = re.sub(r'[3-5]\s*(?:\*|★)', '', name.lower())
+        name_clean = re.sub(r'[1-5]\s*(?:\*|★)', '', name.lower())
         name_clean = re.sub(r'[^a-z0-9а-яіїєґ\s]', ' ', name_clean)
         name_norm = normalize_for_fallback(name_clean)
         name_words = [w for w in re.findall(r'\w+', name_norm) if w not in _NOISE_TOKENS]
@@ -567,7 +586,7 @@ def _fallback_hotel_extraction(user_text: str, candidate_hotels: list) -> list:
                         matches += 1
                         break
         
-        if matches / len(name_words) >= 0.65: # Lower threshold for fuzzy word matching
+        if matches / len(name_words) >= 0.70: # Increased slightly for better precision
             found_hotels.append(name)
             
     return _dedupe_keep_order(found_hotels)
@@ -579,12 +598,15 @@ async def format_tour_message(user_text: str, do_cleanup: bool = False, raw_voic
     # Text to use for hotel name extraction (raw is better for fuzzy matching)
     hotel_search_text = raw_voice_text if raw_voice_text else user_text
     
+    # Pre-clean hotel search text from common ordinal words that might confuse extraction
+    hotel_search_text_cleaned = re.sub(r'\b(перший|другий|третій|четвертий|п’ятий|шостий|сьомий|восьмий|дев’ятий|десятий)\s+готель\b', 'готель', hotel_search_text.lower())
+    
     # 0. Cleanup in parallel with initial detection if requested
     cleanup_task = None
     if do_cleanup:
         cleanup_task = asyncio.create_task(cleanup_transcribed_text(user_text))
 
-    selected_dest = _pick_destination_by_keywords(hotel_search_text, destinations)
+    selected_dest = _pick_destination_by_keywords(hotel_search_text_cleaned, destinations)
     
     fast_models = ["openai/gpt-5.4-mini", "google/gemini-2.5-flash"]
     smart_models = ["openai/gpt-5.4-mini", "google/gemini-2.5-flash"]
@@ -635,18 +657,25 @@ async def format_tour_message(user_text: str, do_cleanup: bool = False, raw_voic
     # broad_hotels = await broad_hotel_task # Skip broad task to rely more on targeted extraction
     extracted_meals = await meal_task
     
+    # NEW: If price_data has more hotels than we extracted, we need to be careful
+    expected_count = len(price_data.get("hotel_prices", [])) if price_data else 0
+    
     logger.info(f"Step 1 parallel done in {asyncio.get_event_loop().time() - start_time:.2f}s. Dest: {selected_dest}")
 
     relevant_hotels = db.get(selected_dest, [])
     # Enable smart candidate filtering for large databases (Crete, Mallorca, etc.)
     # High-quality matches will always be in the top 100.
-    candidate_hotels = _build_hotel_candidates(hotel_search_text, relevant_hotels, limit=60)
+    candidate_hotels = _build_hotel_candidates(hotel_search_text_cleaned, relevant_hotels, limit=60)
     
     async def _do_targeted_extract(text_to_parse):
         # Use the smart-filtered list
         db_names = "\n".join([h['hotel'] for h in candidate_hotels])
         # IMPORTANT: We pass ONLY candidate hotels to LLM to prevent it from picking random ones
         extraction_content = f"ТЕКСТ:\n{text_to_parse}\n\nНАПРЯМОК: {selected_dest}\n\nБАЗА (ТІЛЬКИ ЦІ ГОТЕЛІ):\n{db_names}"
+        
+        # Add hint about expected count
+        if expected_count > 0:
+            extraction_content += f"\n\nВАЖЛИВО: Я очікую знайти РІВНО {expected_count} готелів."
         
         raw = await _call_llm_with_retry(
             messages=[{"role": "system", "content": _EXTRACT_PROMPT}, {"role": "user", "content": extraction_content}],
@@ -665,10 +694,14 @@ async def format_tour_message(user_text: str, do_cleanup: bool = False, raw_voic
     # Try extracting from hotel_search_text (which is raw voice if available)
     extracted_hotels = await _do_targeted_extract(hotel_search_text)
     
-    if not extracted_hotels:
-        logger.info("LLM extraction failed or returned empty list. Trying fallback search...")
-        extracted_hotels = _fallback_hotel_extraction(hotel_search_text, candidate_hotels)
-        if not extracted_hotels:
+    if not extracted_hotels or (expected_count > 0 and len(extracted_hotels) < expected_count):
+        logger.info(f"LLM extraction found {len(extracted_hotels)} but expected {expected_count}. Trying fallback search...")
+        fallback_hotels = _fallback_hotel_extraction(hotel_search_text, candidate_hotels)
+        
+        # If fallback found more or better matches, use it
+        if len(fallback_hotels) >= expected_count:
+            extracted_hotels = fallback_hotels
+        elif not extracted_hotels:
              # Try one more time with broader candidate list
              extracted_hotels = _fallback_hotel_extraction(hotel_search_text, relevant_hotels[:200])
              
@@ -679,12 +712,16 @@ async def format_tour_message(user_text: str, do_cleanup: bool = False, raw_voic
         if not extracted_hotels:
             extracted_hotels = _fallback_hotel_extraction(user_text, candidate_hotels)
     
-    # HARD LIMIT: If price_data tells us exactly how many hotels there should be, use it.
-    if price_data and price_data.get("hotel_prices"):
-        expected_count = len(price_data["hotel_prices"])
+    # FINAL SYNC: Ensure extracted_hotels and hotel_prices are same length without shifting!
+    if expected_count > 0:
         if len(extracted_hotels) > expected_count:
             logger.info(f"Trimming hotels from {len(extracted_hotels)} to {expected_count} based on prices.")
             extracted_hotels = extracted_hotels[:expected_count]
+        elif len(extracted_hotels) < expected_count:
+            logger.warning(f"Padding hotels: have {len(extracted_hotels)}, need {expected_count}")
+            # Add placeholders to prevent price shift
+            while len(extracted_hotels) < expected_count:
+                extracted_hotels.append(f"Невідомий готель {len(extracted_hotels)+1}")
 
     matched_info = []
     hotel_link_map = {}
