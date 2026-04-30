@@ -257,11 +257,17 @@ def fuzzy_match_hotel(hotel_name: str, db: list) -> tuple[dict, float]:
     def normalize_name(name: str) -> str:
         # Remove stars from name for better matching
         cleaned = re.sub(r'[3-5]\s*(?:\*|★)', '', name.lower())
-        # Replace common transcription errors
-        cleaned = cleaned.replace("blucia", "bluesea").replace("blusea", "bluesea").replace("блю сі", "bluesea").replace("блюсі", "bluesea")
-        cleaned = cleaned.replace("бі джей", "bj").replace("бі джи", "bg").replace("би джей", "bj")
-        cleaned = cleaned.replace("blaucel", "bluesea").replace("багамас", "bahamas")
-        # Remove common separators
+        # Replace common transcription errors and synonyms
+        replacements = {
+            "blucia": "bluesea", "blusea": "bluesea", "блю сі": "bluesea", "блюсі": "bluesea",
+            "бі джей": "bj", "бі джи": "bg", "би джей": "bj",
+            "blaucel": "bluesea", "багамас": "bahamas",
+            "іберостар": "iberostar", "ріксос": "rixos", "мітсіс": "mitsis"
+        }
+        for old, new in replacements.items():
+            cleaned = cleaned.replace(old, new)
+            
+        # Remove common separators and noise
         cleaned = re.sub(r'[^a-z0-9а-яіїєґ\s]', ' ', cleaned)
         cleaned = re.sub(r'\s+', ' ', cleaned).strip()
         tokens = [t for t in cleaned.split() if t not in _NOISE_TOKENS]
@@ -281,7 +287,7 @@ def fuzzy_match_hotel(hotel_name: str, db: list) -> tuple[dict, float]:
         if not db_name:
             db_name = db_name_orig.lower()
             
-        # 1. Exact match (CRITICAL: if manager wrote full name correctly)
+        # 1. Exact match
         if query == db_name:
             return h, 1.0
 
@@ -290,7 +296,6 @@ def fuzzy_match_hotel(hotel_name: str, db: list) -> tuple[dict, float]:
         
         # 3. Word overlap bonus
         db_words = set(re.findall(r'\w+', db_name))
-        
         if not query_words: continue
         
         overlap = len(query_words & db_words)
@@ -299,21 +304,22 @@ def fuzzy_match_hotel(hotel_name: str, db: list) -> tuple[dict, float]:
         # Weighted score: overlap is more important for identifying the right hotel
         score = ratio * 0.3 + overlap_ratio * 0.7
         
-        # Penalty for length difference
-    len_diff = abs(len(query) - len(db_name))
-    if len_diff > 25:
-        score -= 0.1
+        # Penalty for large length difference
+        len_diff = abs(len(query) - len(db_name))
+        if len_diff > 25:
+            score -= 0.1
 
-    # Strong bonus for high word overlap
-    if overlap_ratio >= 0.9:
-        score += 0.5
+        # Strong bonus for high word overlap
+        if overlap_ratio >= 0.9:
+            score += 0.5
             
-    if score > max_score:
-        max_score = score
-        best_match = h
+        if score > max_score:
+            max_score = score
+            best_match = h
             
     if best_match and max_score > 0.7: 
         return best_match, max_score
+        
     return {"hotel": hotel_name, "link": "Посилання відсутнє ⚠️"}, 0.0
 
 def _build_hotel_candidates(user_text: str, relevant_hotels: list, limit: int = 140) -> list:
