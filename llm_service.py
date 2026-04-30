@@ -83,16 +83,19 @@ _EXTRACT_PRICES_PROMPT = """Ти — фінансовий аналітик ту�
 ПРАВИЛА:
 1. adults: кількість дорослих.
 2. children: кількість дітей.
-3. nights: кількість ночей.
-4. check_in_month: номер місяця (1-12).
-5. check_in_day: число місяця.
-6. flight_per_person: ціна авіа НА ОДНУ особу. Якщо вказано загальну суму — розділи її на всіх людей.
-7. hotel_prices: список ЗАГАЛЬНИХ цін за номер для кожного готелю (в тому ж порядку, що в тексті).
-8. hotel_stars: зірковість кожного готелю (0, 3, 4, 5).
-9. other_per_person: інші витрати на особу.
+3. infants: кількість немовлят.
+4. nights: кількість ночей.
+5. check_in_month: номер місяця (1-12).
+6. check_in_day: число місяця.
+7. flight_total: ЗАГАЛЬНА ціна авіа за всіх. Якщо вказано за особу — просто поверни як є, я сам порахую.
+8. hotel_prices: JSON-об'єкт { "Назва готелю": ціна }. 
+   - КРИТИЧНО: Використовуй назву готелю як КЛЮЧ, а ціну як ЗНАЧЕННЯ. 
+   - Якщо назви немає, використовуй "Hotel 1", "Hotel 2".
+9. hotel_stars: список зірок для готелів у тому ж порядку.
+10. other_per_person: інші витрати на особу.
 
 ФОРМАТ: Тільки JSON.
-КРИТИЧНО: Якщо вказано "Ціни: 500, 600, 700" — це ціни трьох готелів. Витягни їх всі.
+КРИТИЧНО: Не роби жодних математичних розрахунків. Просто витягни сирі цифри з тексту.
 """
 
 _FORMAT_PROMPT = """Ти — професійний тревел-дизайнер. Твоє завдання: написати вступну частину повідомлення та блок рекомендацій.
@@ -737,76 +740,55 @@ async def format_tour_message(user_text: str, do_cleanup: bool = False, raw_voic
 
     relevant_hotels = db.get(selected_dest, [])
     
-    # Enable smart candidate filtering for large databases (Crete, Mallorca, etc.)
-    # High-quality matches will always be in the top 300.
-    candidate_hotels = _build_hotel_candidates(hotel_search_text_cleaned, relevant_hotels, limit=300)
-    
-    # --- NEW: STRICT DIRECT MATCHING PHASE ---
-    # Before asking LLM, let's see if we can find hotels directly by name overlap
-    # This prevents LLM from "re-interpreting" clear names like "BJ Playamar"
-    direct_matched_hotels = []
-    
-    # Pre-normalize the full user text for direct searching (remove noise, punctuation)
+    # -----------------------------------------
+    # STRICT DIRECT MATCHING PHASE
+    # -----------------------------------------
     text_clean_for_search = re.sub(r'[^a-z0-9\s]', ' ', hotel_search_text_cleaned.lower())
     text_clean_for_search = re.sub(r'\s+', ' ', text_clean_for_search).strip()
     
-    # Simple direct matching: if a hotel name from DB is clearly in the user text
+    direct_matched_hotels = []
     for h in relevant_hotels:
         h_name = h['hotel'].lower()
-        # Remove stars and trailing digits (often ratings) for direct match check
         h_name = re.sub(r'\s*[1-5]\s*(?:\*|★)', ' ', h_name)
-        h_name = re.sub(r'\s+[1-5]\s*$', ' ', h_name) # Remove trailing star digit
+        h_name = re.sub(r'\s+[1-5]\s*$', ' ', h_name)
         
-        # Remove common noise for check
         h_clean = re.sub(r'[^a-z0-9\s]', ' ', h_name)
         h_clean = re.sub(r'\s+', ' ', h_clean).strip()
-        
-        # Filter out noise from DB name
         h_words = [w for w in h_clean.split() if w not in _NOISE_TOKENS and len(w) > 2]
         
         if h_words:
-            # 1. Check if the full clean name is in the clean text
             if h_clean in text_clean_for_search:
                 direct_matched_hotels.append(h['hotel'])
-            # 2. Check if ALL important unique words match exactly
             else:
                 unique_db_words = set(h_words) - BRANDS
                 if unique_db_words and all(word in text_clean_for_search for word in unique_db_words):
-                    # Also ensure the brand matches if present in both
                     db_brands = set(h_words) & BRANDS
                     text_words = set(text_clean_for_search.split())
                     text_brands = text_words & BRANDS
-                    
                     if not db_brands or (db_brands & text_brands):
                         direct_matched_hotels.append(h['hotel'])
     
-    # Special case: Playamar vs Caballero/Mar Hotels (Prioritize Playamar if it's in text)
     if "playamar" in text_clean_for_search:
-        # Filter out other matches that might have "Mar" or similar but are not Playamar
         direct_matched_hotels = [name for name in direct_matched_hotels if "playamar" in name.lower() or "playamar" not in " ".join(direct_matched_hotels).lower()]
     
     logger.info(f"Direct matching found: {direct_matched_hotels}")
-    # -----------------------------------------
 
     async def _do_targeted_extract(text_to_parse):
-        # Use the smart-filtered list
-        db_names = "\n".join([h['hotel'] for h in candidate_hotels])
-        # IMPORTANT: We pass ONLY candidate hotels to LLM to prevent it from picking random ones
-        extraction_content = f"ТЕКСТ:\n{text_to_parse}\n\nНАПРЯМОК: {selected_dest}\n\nБАЗА (ТІЛЬКИ ЦІ ГОТЕЛІ):\n{db_names}"
+        # NO MORE CHUNKING: Send the entire relevant hotels list
+        db_names = "\n".join([h['hotel'] for h in relevant_hotels])
+        extraction_content = f"ТЕКСТ:\n{text_to_parse}\n\nНАПРЯМОК: {selected_dest}\n\nБАЗА:\n{db_names}"
         
-        # Add hint about expected count
         if expected_count > 0:
             extraction_content += f"\n\nВАЖЛИВО: Я очікую знайти РІВНО {expected_count} готелів."
         
-        # If we found direct matches, tell LLM about them to reduce hallucinations
         if direct_matched_hotels:
             extraction_content += f"\n\nПІДКАЗКА: Деякі готелі, що точно є в тексті: {', '.join(direct_matched_hotels)}"
         
         raw = await _call_llm_with_retry(
             messages=[{"role": "system", "content": _EXTRACT_PROMPT}, {"role": "user", "content": extraction_content}],
             models=["openai/gpt-5.4-mini", "google/gemini-2.5-flash"],
-            timeout=40,
-            max_tokens=1000,
+            timeout=60, # Increased timeout for larger context
+            max_tokens=1500,
             response_format={"type": "json_object"}
         )
         if raw:
@@ -877,126 +859,123 @@ async def format_tour_message(user_text: str, do_cleanup: bool = False, raw_voic
         # Filter out None and deduplicate while keeping order
         extracted_hotels = [h for h in recovered_hotels if h is not None]
     
-    # FINAL SYNC: Ensure extracted_hotels and hotel_prices are same length without shifting!
-    if expected_count > 0:
-        if len(extracted_hotels) > expected_count:
-            logger.info(f"Trimming hotels from {len(extracted_hotels)} to {expected_count} based on prices.")
-            extracted_hotels = extracted_hotels[:expected_count]
-        elif len(extracted_hotels) < expected_count:
-            logger.warning(f"Padding hotels: have {len(extracted_hotels)}, need {expected_count}")
-            # Add placeholders to prevent price shift
-            while len(extracted_hotels) < expected_count:
-                extracted_hotels.append(f"Невідомий готель {len(extracted_hotels)+1}")
+    # Final sync and price extraction refinement
+    hotel_prices_map = price_data.get("hotel_prices", {}) if price_data else {}
+    if isinstance(hotel_prices_map, list):
+        new_map = {}
+        for idx, p in enumerate(hotel_prices_map):
+            new_map[f"Hotel {idx+1}"] = p
+        hotel_prices_map = new_map
 
-    matched_info = []
     hotel_link_map = {}
     all_hotels_list = [hotel for hotels in db.values() for hotel in hotels]
     matched_hotels = []
     seen_hotels = set()
+    final_hotel_prices_raw = []
+    
     for h_name in extracted_hotels:
-        match, score = fuzzy_match_hotel(h_name, candidate_hotels)
-        if score < 0.85 and "Посилання відсутнє" in match["link"]: # Increased threshold for database match
-            match, score = fuzzy_match_hotel(h_name, relevant_hotels)
-        if score < 0.85 and all_hotels_list:
+        # Try to match extracted name with the database
+        match, score = fuzzy_match_hotel(h_name, relevant_hotels)
+        if score < 0.75 and all_hotels_list:
             global_match, g_score = fuzzy_match_hotel(h_name, all_hotels_list)
-            if g_score > 0.85:
+            if g_score > 0.75:
                 match, score = global_match, g_score
         
-        # New Rule: If confidence is low, add warning emoji. If no match, use original name.
         display_name = match["hotel"]
         stars = _extract_allowed_stars(display_name)
-        
-        # CLEANUP: Remove any existing stars or symbols from display_name before adding ours
-        # to avoid "3* 3★ 3★"
         display_name = re.sub(r'\s*[1-5]\s*(?:\*|★)', '', display_name).strip()
 
-        # HALLUCINATION PROTECTION: If score is low, DO NOT use the database name.
-        # Use the name provided by the manager in the text.
         if "[NOT_FOUND]" in h_name:
             display_name = h_name.replace("[NOT_FOUND]", "").strip() + " ⚠️ (немає в базі)"
             match = {"hotel": display_name, "link": "Посилання відсутнє ⚠️"}
-        elif score < 0.80:
-            logger.warning(f"Low match score ({score}) for '{h_name}'. Using original name instead of '{match['hotel']}'.")
+        elif score < 0.75:
             display_name = f"{h_name} ⚠️"
             match = {"hotel": display_name, "link": "Посилання відсутнє ⚠️"}
         elif score < 0.90: 
             display_name = f"{display_name} ⚠️"
 
-        # Force stars from DB if they were extracted
-        if stars:
-            # Check if name already has this exact star string to avoid duplication
-            if stars not in display_name:
-                display_name = f"{display_name} {stars}"
+        if stars and stars not in display_name:
+            display_name = f"{display_name} {stars}"
 
         key = display_name.strip().lower()
         if key in seen_hotels: continue
         seen_hotels.add(key)
         
-        # Update match dict for internal consistency
         match["hotel"] = display_name
         matched_hotels.append(match)
-        
-        stars = _extract_allowed_stars(display_name)
-        matched_info.append(f"- Назва: {display_name}, Зірки: {stars or 'не вказувати'}, Посилання: {match['link']}")
         hotel_link_map[display_name.lower()] = match['link']
         
+        # FIND PRICE: Try to find price in the map by name similarity
+        price_val = 0
+        best_price_match_score = 0
+        
+        if h_name in hotel_prices_map:
+            price_val = hotel_prices_map[h_name]
+        else:
+            for price_key, val in hotel_prices_map.items():
+                s = difflib.SequenceMatcher(None, h_name.lower(), price_key.lower()).ratio()
+                if s > best_price_match_score:
+                    best_price_match_score = s
+                    price_val = val
+        
+        if price_val == 0 and len(final_hotel_prices_raw) < len(hotel_prices_map):
+            idx_key = f"Hotel {len(final_hotel_prices_raw) + 1}"
+            price_val = hotel_prices_map.get(idx_key, 0)
+
+        try:
+            p_clean = re.sub(r'[^\d.]', '', str(price_val).replace(',', '.'))
+            final_hotel_prices_raw.append(float(p_clean) if p_clean else 0.0)
+        except:
+            final_hotel_prices_raw.append(0.0)
+
     price_label = "💰 загальна вартість туру за особу"
     computed_prices = []
     has_children = False
 
-    if price_data and price_data.get("hotel_prices") and price_data.get("flight_per_person") is not None:
+    if price_data and final_hotel_prices_raw:
         adults = _safe_int(price_data.get("adults"), 2)
         children = _safe_int(price_data.get("children"), 0)
         infants = _safe_int(price_data.get("infants"), 0)
         total_people = adults + children
         has_children = (children + infants) > 0
         
-        flight = 0.0
+        # NEW: Raw flight price (might be total or per person)
+        flight_raw_val = price_data.get("flight_total") or price_data.get("flight_per_person") or 0
+        flight_per_person = 0.0
         try:
-            flight_raw = str(price_data.get("flight_per_person") or "0")
-            flight = float(re.sub(r'[^\d.]', '', flight_raw.replace(',', '.')) or 0)
-        except Exception: pass
+            f_clean = float(re.sub(r'[^\d.]', '', str(flight_raw_val).replace(',', '.')) or 0)
+            if f_clean > 500 and total_people > 1 and "total" in str(price_data.keys()).lower():
+                flight_per_person = f_clean / total_people
+            else:
+                flight_per_person = f_clean
+        except: pass
         
         other = 0.0
         try:
             other_raw = str(price_data.get("other_per_person") or "0")
-            other = float(re.sub(r'[^\d.]', '', other_raw.replace(',', '.')) or 0)
-        except Exception: pass
+            other = float(re.sub(r'\D.', '', other_raw.replace(',', '.')) or 0)
+        except: pass
         
-        hotel_prices_raw = []
-        for p in (price_data.get("hotel_prices") or []):
-            try:
-                p_clean = re.sub(r'[^\d.]', '', str(p).replace(',', '.'))
-                if p_clean: hotel_prices_raw.append(float(p_clean))
-            except Exception: pass
-            
         nights = _safe_int(price_data.get("nights"), 7)
         month = _safe_int(price_data.get("check_in_month"), 6)
         hotel_stars_list = price_data.get("hotel_stars") or []
-
-        # Ensure hotel_prices has enough elements to match matched_hotels
-        if len(hotel_prices_raw) < len(matched_hotels):
-            last_p = hotel_prices_raw[-1] if hotel_prices_raw else 0
-            while len(hotel_prices_raw) < len(matched_hotels):
-                hotel_prices_raw.append(last_p)
         
-        hotel_prices_raw = hotel_prices_raw[:len(matched_hotels)]
-        
-        for idx, hotel_total in enumerate(hotel_prices_raw):
+        for idx, hotel_total in enumerate(final_hotel_prices_raw):
+            stars_val = 0
             db_stars_str = _extract_allowed_stars(matched_hotels[idx]['hotel']) if idx < len(matched_hotels) else ""
             if db_stars_str:
                 m_stars = re.search(r'\d', db_stars_str)
                 stars_val = int(m_stars.group()) if m_stars else 0
-            else:
-                stars_val = int(hotel_stars_list[idx]) if idx < len(hotel_stars_list) else 0
+            elif hotel_stars_list and idx < len(hotel_stars_list):
+                stars_val = _safe_int(hotel_stars_list[idx])
             
             tax_per_night = get_tax_per_person_per_night(selected_dest or "", stars_val, month, total_people)
             total_tax_for_stay = tax_per_night * nights * adults
             tax_per_person_share = total_tax_for_stay / total_people if total_people > 0 else 0
             
-            # MATH LOGIC FROM APRIL 28TH:
+            # MATH LOGIC FROM APRIL 28TH
             hotel_per_person = hotel_total / total_people if total_people > 0 else hotel_total
-            base_cost_no_tax = hotel_per_person + flight + other
+            base_cost_no_tax = hotel_per_person + flight_per_person + other
             
             if base_cost_no_tax < 350:
                 final_no_tax = base_cost_no_tax + 150
