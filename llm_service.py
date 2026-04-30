@@ -65,15 +65,13 @@ _DESTINATION_PROMPT = """Ти — туристичний асистент. То�
 Без жодного іншого тексту.
 """
 
-_EXTRACT_PROMPT = """Ти — суворий AI-асистент для вилучення назв готелів. 
-Твоє завдання: знайти у тексті ВСІ згадані готелі і зіставити їх з наданим списком з бази. 
-
-ПРАВИЛА (ПОРУШЕННЯ КРИТИЧНЕ): 
-1. Використовуй ТІЛЬКИ назви з наданого списку. 
-2. ЗАБОРОНЕНО ІГНОРУВАТИ БРЕНДИ: Якщо менеджер сказав "BLUESEA Cala Millor", а в базі є тільки "Cala Millor Garden" — це РІЗНІ готелі! У такому випадку ПОВЕРТАЙ [NOT_FOUND] BLUESEA Cala Millor. 
-3. НІЯКИХ ФАНТАЗІЙ: Якщо є хоч найменший сумнів щодо збігу — завжди використовуй [NOT_FOUND] + оригінальна назва. 
-4. ПОРЯДОК ТА КІЛЬКІСТЬ: Уважно порахуй готелі в тексті. Ти МАЄШ повернути рівно таку ж кількість! 
-5. ФОРМАТ: Тільки JSON {"hotels": ["Name 1", "[NOT_FOUND] Name 2"]}. 
+_EXTRACT_PROMPT = """Ти — робот-парсеp. Твоє завдання: виписати назви готелів ТАК, ЯК ЇХ НАПИСАВ МЕНЕДЖЕР. 
+ПРАВИЛА: 
+1. Витягни назву готелю та ціну. 
+2. НЕ намагайся знайти їх у базі. 
+3. НЕ виправляй назви. 
+4. ПОРЯДОК: як у тексті. 
+ФОРМАТ: JSON {"found_hotels": [{"raw_name": "назва", "price": 1200}]} 
 """
 
 _EXTRACT_PRICES_PROMPT = """Ти — фінансовий парсер. Витягни числові дані з тексту: 
@@ -279,81 +277,42 @@ def fuzzy_match_hotel(hotel_name: str, db: list) -> tuple[dict, float]:
         final_tokens = [t for t in cleaned.split() if t not in _NOISE_TOKENS]
         return " ".join(final_tokens)
 
+    query = normalize_name(hotel_name)
+    query_words = set(query.split())
+    
+    if not query_words:
+        return {"hotel": hotel_name, "link": "Посилання відсутнє ⚠️"}, 0.0
+
     best_match = None
     max_score = 0.0
-    query = normalize_name(hotel_name)
-    if not query:
-        query = hotel_name.lower()
-    
-    query_words = set(re.findall(r'\w+', query))
-    query_brands = query_words & BRANDS
-    
+
     for h in db:
         db_name_orig = h['hotel']
         db_name = normalize_name(db_name_orig)
-        if not db_name:
-            db_name = db_name_orig.lower()
-            
-        # 1. Точне входження (якщо назва з тексту міститься в назві з бази повністю або навпаки)
-        if query in db_name or db_name in query:
-            return h, 1.5 # Штучно ставимо високий бал для точного входження
-
-        # 2. SequenceMatcher score
-        ratio = difflib.SequenceMatcher(None, query, db_name).ratio()
+        db_words = set(db_name.split())
         
-        # 3. Word overlap bonus
-        db_words = set(re.findall(r'\w+', db_name))
-        db_brands = db_words & BRANDS
-        if not query_words: continue
+        # 1. Проверяем, входят ли ВСЕ слова из запроса в название из базы 
+        # (Например: "Eri Beach" полностью входит в "Eri Beach & Village") 
+        if query_words.issubset(db_words): 
+            return h, 1.0 
         
-        overlap_words = query_words & db_words
-        overlap = len(overlap_words)
-        overlap_ratio = overlap / len(query_words) if query_words else 0
-
-        # Weighted score: overlap is more important for identifying the right hotel
-        score = ratio * 0.3 + overlap_ratio * 0.7
+        # 2. Считаем процент перекрытия слов 
+        overlap = len(query_words & db_words) 
+        score = overlap / len(query_words) 
         
-        # BRAND PENALTY/BONUS - Максимально жорсткий 
-        if query_brands and db_brands: 
-            if query_brands != db_brands: 
-                score -= 1.0 # Конфлікт брендів 
-            else: 
-                score += 0.4 # Бренди збіглись 
-        elif db_brands and not query_brands: 
-            score -= 0.1 # Менеджер забув бренд, легкий штраф 
-        elif query_brands and not db_brands: 
-            score -= 0.8 # СУВОРИЙ ШТРАФ: Менеджер назвав бренд (BLUESEA), а в базі готель без нього (Garden) 
+        # Штраф за разные бренды (если они есть) 
+        q_brands = query_words & BRANDS 
+        d_brands = db_words & BRANDS 
+        if q_brands and d_brands and q_brands != d_brands: 
+            score -= 1.0 
 
-        # UNIQUE WORD BONUS & ПЕНАЛЬТІ ЗА ЗАЙВІ СЛОВА (Cala Millor Garden) 
-        unique_query_words = query_words - BRANDS 
-        unique_db_words = db_words - BRANDS 
-        unique_overlap = len(unique_query_words & unique_db_words) 
-        
-        if unique_query_words: 
-            unique_ratio = unique_overlap / len(unique_query_words) 
-            score += unique_ratio * 0.7 
-            
-            # Штраф, якщо в запиті є слова, яких немає в базі 
-            extra_query = unique_query_words - unique_db_words 
-            if extra_query: 
-                score -= len(extra_query) * 0.7 
-                
-        # НОВЕ: Штраф, якщо В БАЗІ є зайві слова (наприклад слово "Garden", якого не казав менеджер) 
-        extra_db = unique_db_words - unique_query_words 
-        if extra_db: 
-            score -= len(extra_db) * 0.4 
+        if score > max_score: 
+            max_score = score 
+            best_match = h 
 
-        # Penalty for large length difference
-        len_diff = abs(len(query) - len(db_name))
-        if len_diff > 10:
-            score -= 0.4
-
-        if score > max_score:
-            max_score = score
-            best_match = h
-            
-    if best_match and max_score > 0.95: # Тепер 95% збігу або нічого!
-        return best_match, max_score
+    # ПОРОГ ТЕПЕРЬ 0.6 (позволяет находить отели, даже если менеджер сказав половину названия) 
+    if best_match and max_score >= 0.6: 
+        return best_match, max_score 
         
     return {"hotel": hotel_name, "link": "Посилання відсутнє ⚠️"}, 0.0
 
@@ -818,187 +777,56 @@ async def format_tour_message(user_text: str, do_cleanup: bool = False, raw_voic
     
     logger.info(f"Direct matching found: {direct_matched_hotels}")
 
-    async def _do_targeted_extract(text_to_parse):
-        # NO MORE CHUNKING: Send the entire relevant hotels list
-        db_names = "\n".join([h['hotel'] for h in relevant_hotels])
-        # ✅ ТУТ ВИКОРИСТОВУЄМО clean_dest_name ЗАМІСТЬ selected_dest
-        extraction_content = f"ТЕКСТ МЕНЕДЖЕРА:\n{text_to_parse}\n\nНАПРЯМОК: {clean_dest_name}\n\nБАЗА:\n{db_names}"
-        
-        if expected_count > 0:
-            extraction_content += f"\n\nВАЖЛИВО: Я очікую знайти РІВНО {expected_count} готелів."
-        
-        if direct_matched_hotels:
-            extraction_content += f"\n\nПІДКАЗКА: Деякі готелі, що точно є в тексті: {', '.join(direct_matched_hotels)}"
-        
+    async def _extract_hotels_and_prices(text):
         raw = await _call_llm_with_retry(
-            messages=[{"role": "system", "content": _EXTRACT_PROMPT}, {"role": "user", "content": extraction_content}],
-            models=["openai/gpt-5.4-mini", "google/gemini-2.5-flash"],
-            timeout=60, # Increased timeout for larger context
-            max_tokens=1500,
+            messages=[{"role": "system", "content": _EXTRACT_PROMPT}, {"role": "user", "content": text}],
+            models=fast_models,
+            timeout=25,
             response_format={"type": "json_object"}
         )
         if raw:
             try:
-                return json.loads(raw).get("hotels", [])
+                return json.loads(raw).get("found_hotels", [])
             except: pass
         return []
 
-    extracted_hotels = await _do_targeted_extract(hotel_search_text)
-    logger.info(f"LLM extracted {len(extracted_hotels)} hotels: {extracted_hotels}")
+    # Витягуємо готелі та ціни парой
+    extracted_data = await _extract_hotels_and_prices(hotel_search_text)
+    extracted_hotels_raw = [item.get("raw_name") for item in extracted_data]
+    extracted_prices_raw = [item.get("price") for item in extracted_data]
     
-    if not extracted_hotels or (expected_count > 0 and len(extracted_hotels) < expected_count):
-        logger.info(f"LLM extraction found {len(extracted_hotels)} but expected {expected_count}. Trying fallback search...")
-        fallback_hotels = _fallback_hotel_extraction(hotel_search_text, candidate_hotels)
-        
-        # If fallback found more or better matches, use it
-        if len(fallback_hotels) >= expected_count:
-            logger.info(f"Fallback found {len(fallback_hotels)} hotels, which meets expected count.")
-            extracted_hotels = fallback_hotels
-        elif len(fallback_hotels) > len(extracted_hotels):
-            logger.info(f"Fallback found {len(fallback_hotels)} hotels, more than LLM. Using fallback.")
-            extracted_hotels = fallback_hotels
-        elif not extracted_hotels:
-             # Try one more time with broader candidate list
-             logger.info("Trying broad fallback search...")
-             extracted_hotels = _fallback_hotel_extraction(hotel_search_text, relevant_hotels[:300])
-             
-    if not extracted_hotels and raw_voice_text:
-        # If extraction from raw failed, try the cleaned text as last resort
-        logger.info("Retrying extraction from cleaned text...")
-        extracted_hotels = await _do_targeted_extract(user_text)
-        if not extracted_hotels:
-            extracted_hotels = _fallback_hotel_extraction(user_text, candidate_hotels)
-    
-    # Final check: if we have prices but fewer hotels, try to find missing hotels by simple word search
-    if expected_count > 0 and len(extracted_hotels) < expected_count:
-        logger.info(f"Still missing {expected_count - len(extracted_hotels)} hotels. Searching for unmatched candidates...")
-        # Get blocks from text to find which "N готель" is missing
-        text_lower = hotel_search_text.lower()
-        
-        recovered_hotels = [None] * expected_count
-        # Fill in what we already have by checking their positions or just simple assignment if count matches
-        # For now, let's try to find which "N готель" matches which extracted hotel
-        for h in extracted_hotels:
-            # Simple heuristic: if we can't find position, we'll fill gaps later
-            recovered_hotels[extracted_hotels.index(h)] = h
+    logger.info(f"LLM extracted {len(extracted_hotels_raw)} items: {extracted_data}")
 
-        for i in range(expected_count):
-            if recovered_hotels[i] is not None: continue
-            
-            # Try to find a hotel that is mentioned near "i+1 готель"
-            ordinal_pattern = rf"(?:{i+1}|{['перший','другий','третій','четвертий','п’ятий','шостий','сьомий','восьмий','дев’ятий','десятий'][i]})\s*(?:готель|отель|варіант)"
-            context_match = re.search(ordinal_pattern + r"(.*?)(?:\d+\s*(?:готель|отель|варіант)|$)", text_lower, re.DOTALL)
-            
-            if context_match:
-                context_text = context_match.group(1)
-                # Search for any hotel from DB in this specific context
-                for h in relevant_hotels:
-                    # We need to use a normalization that is available in this scope
-                    # fuzzy_match_hotel has a nested normalize_name, but we can't call it directly.
-                    # We'll use a simplified version or use fuzzy_match_hotel itself.
-                    h_name_clean = re.sub(r'[^a-z0-9\s]', ' ', h['hotel'].lower())
-                    unique_words = set(h_name_clean.split()) - BRANDS - _NOISE_TOKENS
-                    if unique_words and all(word in context_text for word in unique_words):
-                        recovered_hotels[i] = h['hotel']
-                        break
-        
-        # Filter out None and sort by appearance in text
-        extracted_hotels = _sort_hotels_by_appearance([h for h in recovered_hotels if h is not None], hotel_search_text)
-    else:
-        # Sort extracted hotels by their appearance in text
-        extracted_hotels = _sort_hotels_by_appearance(extracted_hotels, hotel_search_text)
-    
-    # Final sync and price extraction refinement
-    hotel_prices_map = price_data.get("hotel_prices", {}) if price_data else {}
-    if isinstance(hotel_prices_map, list):
-        new_map = {}
-        for idx, p in enumerate(hotel_prices_map):
-            new_map[f"Hotel {idx+1}"] = p
-        hotel_prices_map = new_map
-
-    hotel_link_map = {}
-    all_hotels_list = [hotel for hotels in db.values() for hotel in hotels]
+    # Matching extracted names with DB
     matched_hotels = []
-    seen_hotels = set()
     final_hotel_prices_raw = []
-    prices_dict = price_data.get("hotel_prices", {}) if price_data else {}
+    seen_hotels = set()
     
-    # Matching extracted names with DB to get links and full names
-    for h_name in extracted_hotels:
-        # 1. ПЕРЕВІРКА НА [NOT_FOUND]: якщо готелю немає, блокуємо пошук по базах!
-        if "[NOT_FOUND]" in h_name or "немає в базі" in h_name.lower() or "⚠️" in h_name:
-            display_name = h_name.replace("[NOT_FOUND]", "").replace("(немає в базі)", "").replace("⚠️", "").strip() + " ⚠️ (немає в базі)"
-            match = {"hotel": display_name, "link": "Посилання відсутнє ⚠️"}
-            score = 1.0  # Штучно ставимо високий бал, щоб заблокувати подальший пошук
-        else:
-            # 2. Стандартний пошук для нормальних готелів
-            match, score = fuzzy_match_hotel(h_name, relevant_hotels)
-            # Глобальний пошук видалено, щоб уникнути підміни готелів з інших напрямків
+    for i, h_name in enumerate(extracted_hotels_raw):
+        if not h_name: continue
         
+        match, score = fuzzy_match_hotel(h_name, relevant_hotels)
         display_name = match["hotel"]
+        
+        # Додаємо зірки, якщо їх немає в назві
         stars = _extract_allowed_stars(display_name)
-        display_name = re.sub(r'\s*[1-5]\s*(?:\*|★)', '', display_name).strip()
-
-        if "[NOT_FOUND]" in h_name:
-            display_name = h_name.replace("[NOT_FOUND]", "").strip() + " ⚠️ (немає в базі)"
-            match = {"hotel": display_name, "link": "Посилання відсутнє ⚠️"}
-        elif score < 0.75:
-            display_name = f"{h_name} ⚠️"
-            match = {"hotel": display_name, "link": "Посилання відсутнє ⚠️"}
-        elif score < 0.90: 
-            display_name = f"{display_name} ⚠️"
-
         if stars and stars not in display_name:
             display_name = f"{display_name} {stars}"
-
+            
         key = display_name.strip().lower()
         if key in seen_hotels: continue
         seen_hotels.add(key)
         
         match["hotel"] = display_name
         matched_hotels.append(match)
-        hotel_link_map[display_name.lower()] = match['link']
-
-    # Syncing prices with the matched_hotels list using extracted_hotels as keys
-    # Якщо нейромережа все одно повернула масив (підстраховка)
-    if isinstance(prices_dict, list):
-        # Якщо модель помилилась і повернула масив замість словника
-        for p in prices_dict:
-            try:
-                p_clean = re.sub(r'[^\d.]', '', str(p).replace(',', '.'))
-                final_hotel_prices_raw.append(float(p_clean) if p_clean else 0.0)
-            except:
-                pass
-    else:
-        # СУВОРИЙ МАПІНГ: Шукаємо ціну саме для цього готелю
-        for h_info in matched_hotels:
-            # Очищаємо ім'я від всіх плашок, щоб точно знайти його в словнику цін
-            hotel_name = h_info['hotel'].replace("⚠️", "").replace("(немає в базі)", "").replace("[NOT_FOUND]", "").strip()
-            # Clean stars/ratings from name for search
-            hotel_name = re.sub(r'\s*[1-5]\s*(?:\*|★)', '', hotel_name).strip()
-            
-            val = prices_dict.get(hotel_name, 0)
-            
-            # Нечіткий пошук у словнику, якщо ключ трохи відрізняється
-            if not val:
-                for k, v in prices_dict.items():
-                    k_norm = re.sub(r'[^a-zа-яіїєґ0-9]', '', k.lower())
-                    n_norm = re.sub(r'[^a-zа-яіїєґ0-9]', '', hotel_name.lower())
-                    if k_norm in n_norm or n_norm in k_norm:
-                        val = v
-                        break
-                        
-            try:
-                p_clean = re.sub(r'[^\d.]', '', str(val).replace(',', '.'))
-                final_hotel_prices_raw.append(float(p_clean) if p_clean else 0.0)
-            except:
-                final_hotel_prices_raw.append(0.0) # Якщо не знайшли, ставимо 0, а не дублюємо чужу ціну
-
-    # Добиваємо нулями, якщо готелів більше, ніж цін
-    while len(final_hotel_prices_raw) < len(matched_hotels):
-        final_hotel_prices_raw.append(0.0)
         
-    final_hotel_prices_raw = final_hotel_prices_raw[:len(matched_hotels)]
+        # Беремо ціну, яку витягнула LLM парой до цього готелю
+        price_val = extracted_prices_raw[i] if i < len(extracted_prices_raw) else 0
+        try:
+            p_clean = re.sub(r'[^\d.]', '', str(price_val).replace(',', '.'))
+            final_hotel_prices_raw.append(float(p_clean) if p_clean else 0.0)
+        except:
+            final_hotel_prices_raw.append(0.0)
 
     computed_prices = []
     has_children = False
