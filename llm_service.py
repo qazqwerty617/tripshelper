@@ -56,6 +56,9 @@ _DESTINATION_ALIASES = {
     "мальорк": "майорка",
 }
 
+# Brands for strict matching (Global for all functions)
+BRANDS = {"bluesea", "hipotels", "globales", "iberostar", "rixos", "mitsis", "grecotel", "sol", "melia", "hsm", "azuline", "bj", "bg"}
+
 _DESTINATION_PROMPT = """Ти — туристичний асистент. Тобі надіслали текст-чернетку від менеджера з описом туру.
 Твоє завдання: визначити напрямок (країну/острів/регіон) з тексту і вибрати один найбільш підходящий варіант із наданого списку доступних напрямків.
 Поверни ТІЛЬКИ назву напрямку зі списку. Якщо жоден не підходить, поверни "Unknown".
@@ -290,9 +293,6 @@ def fuzzy_match_hotel(hotel_name: str, db: list) -> tuple[dict, float]:
         cleaned = re.sub(r'\s+', ' ', cleaned).strip()
         final_tokens = [t for t in cleaned.split() if t not in _NOISE_TOKENS]
         return " ".join(final_tokens)
-
-    # Brands for strict matching
-    BRANDS = {"bluesea", "hipotels", "globales", "iberostar", "rixos", "mitsis", "grecotel", "sol", "melia", "hsm", "azuline", "bj", "bg"}
 
     best_match = None
     max_score = 0.0
