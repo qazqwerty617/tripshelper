@@ -590,7 +590,10 @@ def _fallback_hotel_extraction(user_text: str, candidate_hotels: list) -> list:
     exact_matches = []
     for h in sorted_candidates:
         name = h['hotel']
-        name_clean = re.sub(r'[1-5]\s*(?:\*|★)', '', name.lower())
+        # Clean stars and trailing digits from DB name
+        name_clean = re.sub(r'\s*[1-5]\s*(?:\*|★)', ' ', name.lower())
+        name_clean = re.sub(r'\s+[1-5]\s*$', ' ', name_clean)
+        
         name_clean = re.sub(r'[^a-z0-9а-яіїєґ\s]', ' ', name_clean)
         name_norm = normalize_for_fallback(name_clean)
         
@@ -603,7 +606,10 @@ def _fallback_hotel_extraction(user_text: str, candidate_hotels: list) -> list:
         name = h['hotel']
         if name in exact_matches: continue
         
-        name_clean = re.sub(r'[1-5]\s*(?:\*|★)', '', name.lower())
+        # Clean stars and trailing digits from DB name
+        name_clean = re.sub(r'\s*[1-5]\s*(?:\*|★)', ' ', name.lower())
+        name_clean = re.sub(r'\s+[1-5]\s*$', ' ', name_clean)
+        
         name_clean = re.sub(r'[^a-z0-9а-яіїєґ\s]', ' ', name_clean)
         name_norm = normalize_for_fallback(name_clean)
         name_words = [w for w in re.findall(r'\w+', name_norm) if w not in _NOISE_TOKENS]
@@ -733,8 +739,8 @@ async def format_tour_message(user_text: str, do_cleanup: bool = False, raw_voic
     relevant_hotels = db.get(selected_dest, [])
     
     # Enable smart candidate filtering for large databases (Crete, Mallorca, etc.)
-    # High-quality matches will always be in the top 150.
-    candidate_hotels = _build_hotel_candidates(hotel_search_text_cleaned, relevant_hotels, limit=150)
+    # High-quality matches will always be in the top 300.
+    candidate_hotels = _build_hotel_candidates(hotel_search_text_cleaned, relevant_hotels, limit=300)
     
     # --- NEW: STRICT DIRECT MATCHING PHASE ---
     # Before asking LLM, let's see if we can find hotels directly by name overlap
@@ -748,7 +754,11 @@ async def format_tour_message(user_text: str, do_cleanup: bool = False, raw_voic
     # Simple direct matching: if a hotel name from DB is clearly in the user text
     for h in relevant_hotels:
         h_name = h['hotel'].lower()
-        # Remove common noise for check (MUST be identical to text_clean_for_search logic)
+        # Remove stars and trailing digits (often ratings) for direct match check
+        h_name = re.sub(r'\s*[1-5]\s*(?:\*|★)', ' ', h_name)
+        h_name = re.sub(r'\s+[1-5]\s*$', ' ', h_name) # Remove trailing star digit
+        
+        # Remove common noise for check
         h_clean = re.sub(r'[^a-z0-9\s]', ' ', h_name)
         h_clean = re.sub(r'\s+', ' ', h_clean).strip()
         
