@@ -5,7 +5,7 @@ import re
 import difflib
 from openai import AsyncOpenAI
 from config import OPENROUTER_API_KEY, GROQ_API_KEY, GROQ_API_KEYS
-from excel_parser import get_hotel_db, get_tourist_tax_db, get_tax_per_person_per_night
+from excel_parser import get_hotel_db, get_tourist_tax_db, get_tax_per_person_per_night, get_tax_info
 from voice_handler import cleanup_transcribed_text
 
 logger = logging.getLogger(__name__)
