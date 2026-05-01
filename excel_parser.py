@@ -203,14 +203,14 @@ def _month_in_period(period: str, month: int) -> bool:
     return False
 
 
-def get_tax_per_person_per_night(destination: str, stars: int, month: int, num_people: int = 1) -> float:
+def get_tax_info(destination: str, stars: int, month: int) -> Dict:
     """
-    Return tourist tax per person per night for given destination/stars/month.
-    Columns in Excel: [3]=resort [4]=period [5]=unit [6]=0★ [7]=1-2★ [8]=3★ [9]=4★ [10]=5★
-    Returns 0.0 if destination has no tax.
+    Return tax rate and info for given destination/stars/month.
+    Returns {'rate': 0.0, 'per_room': False, 'resort': ''}
     """
+    res = {'rate': 0.0, 'per_room': False, 'resort': ''}
     if not os.path.exists(EXCEL_PATH):
-        return 0.0
+        return res
     try:
         dest_lower = destination.lower()
         resort_name = None
@@ -219,68 +219,53 @@ def get_tax_per_person_per_night(destination: str, stars: int, month: int, num_p
                 resort_name = val.lower()
                 break
         
-        # If no alias, use the destination itself as a fallback
         if not resort_name:
             resort_name = destination.strip().lower()
 
-        # Use read_only=False to be consistent with get_hotel_db and ensure access if needed
         wb = openpyxl.load_workbook(EXCEL_PATH, data_only=True, read_only=False)
         for sheet_name in wb.sheetnames:
             if "ПОДАТОК" not in sheet_name.upper():
                 continue
             ws = wb[sheet_name]
-            for row in ws.iter_rows(min_row=1, max_row=100, values_only=True): # Increased max_row
-                if not any(row):
-                    continue
-                if len(row) < 11 or not row[3] or not row[4]:
+            for row in ws.iter_rows(min_row=1, max_row=100, values_only=True):
+                if len(row) < 10 or not row[2] or not row[3]:
                     continue
                 
-                row_resort = str(row[3]).strip().lower()
+                row_resort = str(row[2]).strip().lower()
                 if row_resort in ("курорт", "таблиця", "ставки", "курорти", "назва"):
                     continue
                 
-                # logger.debug(f"Comparing resort: '{resort_name}' with '{row_resort}'")
-                
-                # Flexible match: either exact or one contains the other
                 if resort_name not in row_resort and row_resort not in resort_name:
                     continue
                 
-                if not _month_in_period(str(row[4]), month):
-                    logger.info(f"Tax period mismatch: '{row[4]}' for month {month}")
+                if not _month_in_period(str(row[3]), month):
                     continue
                 
-                unit = str(row[5]).strip().lower() if row[5] else ""
-                # Col mapping based on Table 1 and Table 2 logic
-                # For Mallorca (Table 2): 0★→6, 3★→8, 4★→9, 5★→10 (1-2★ maps to 0★ column 6)
-                col_map = {0: 6, 1: 6, 2: 6, 3: 8, 4: 9, 5: 10}
-                
-                # SPECIAL CASE: For Mallorca/Ibiza/Spain, 3* and 4* often have the same rate (3.30 or 0.83)
-                # If we are looking for 3* and it's empty, but 4* is not, we might want to check.
-                # However, usually the table is filled. Let's just use the map.
-                col = col_map.get(stars, 9)
+                unit = str(row[4]).strip().lower() if row[4] else ""
+                col_map = {0: 6, 1: 6, 2: 6, 3: 7, 4: 8, 5: 9}
+                col = col_map.get(stars, 8)
                 rate_val = row[col] if len(row) > col else None
                 
                 try:
-                    # Clean the rate value
                     if isinstance(rate_val, str):
-                        # Remove '€' and replace ',' with '.'
                         rate_val = re.sub(r'[^\d.,]', '', rate_val).replace(',', '.')
                     rate = float(rate_val) if rate_val is not None and str(rate_val).strip() != "" else 0.0
-                except (ValueError, TypeError):
+                except:
                     rate = 0.0
                 
-                # UNIT LOGIC: 
-                # "за особу / ніч" (Table 2) -> rate is per person.
-                # "за номер / ніч" (Table 1) -> rate is per room, needs division.
-                if "номер" in unit and num_people > 0:
-                    rate = rate / num_people
-                # If unit is "особу", rate is already per person, no change needed.
-                
-                logger.info(f"TAX FOUND: {row_resort} {stars}★ month={month} -> {rate}€/person/night")
-                return rate
-        
-        logger.info(f"TAX NOT FOUND for {destination} (resort={resort_name}), stars={stars}, month={month}")
-        return 0.0
+                return {
+                    'rate': rate,
+                    'per_room': "номер" in unit,
+                    'resort': row_resort
+                }
+        return res
     except Exception as e:
         logger.error(f"Tax lookup error: {e}")
-        return 0.0
+        return res
+
+def get_tax_per_person_per_night(destination: str, stars: int, month: int, num_people: int = 1) -> float:
+    # Keep this for backward compatibility but use new logic
+    info = get_tax_info(destination, stars, month)
+    if info['per_room']:
+        return info['rate'] / num_people if num_people > 0 else info['rate']
+    return info['rate']

@@ -69,12 +69,11 @@ _EXTRACT_PROMPT = """Ти — спеціалізований AI-асистент
 Твоє завдання: знайти у тексті менеджера ВСІ згадані готелі і зіставити їх з наданим списком з бази.
 
 ПРАВИЛА:
-1. Твоя головна мета — знайти відповідність у "СПИСКУ ГОТЕЛІВ НАПРЯМКУ". 
-2. КРИТИЧНО: Якщо готелю з тексту НЕМАЄ в наданому списку і ти не впевнений на 100% у збігу — НЕ ВИГАДУЙ. У такому випадку поверни оригінальну назву з тексту менеджера, додавши префікс [NOT_FOUND].
-3. ПОРЯДОК ТА КІЛЬКІСТЬ: Повертай готелі рівно в тому порядку, в якому вони йдуть у тексті. Якщо вказано 8 готелів — поверни 8.
-4. ФОРМАТ: Тільки JSON {"hotels": ["Name 1", "Name 2", "[NOT_FOUND] Name 3"]}. Жодного іншого тексту.
-
-КРИТИЧНО: Якщо збігів нуль — використовуй [NOT_FOUND] + назва з тексту. Не намагайся підставити випадковий готель зі списку.
+1. ПОРЯДОК ТА КІЛЬКІСТЬ: Повертай готелі СУВОРО в тому порядку, в якому вони йдуть у тексті. Це КРИТИЧНО для голосових повідомлень.
+2. Твоя головна мета — знайти відповідність у "СПИСКУ ГОТЕЛІВ НАПРЯМКУ". 
+3. КРИТИЧНО: Якщо готелю з тексту НЕМАЄ в наданому списку і ти не впевнений на 100% у збігу — НЕ ВИГАДУЙ. У такому випадку поверни оригінальну назву з тексту менеджера, додавши префікс [NOT_FOUND].
+4. Якщо вказано 6 готелів — поверни 6. Не намагайся додати зайві готелі з бази, яких немає в тексті.
+5. ФОРМАТ: Тільки JSON {"hotels": ["Name 1", "Name 2", "[NOT_FOUND] Name 3"]}. Жодного іншого тексту.
 """
 
 _EXTRACT_PRICES_PROMPT = """Ти — фінансовий аналітик туристичних турів. 
@@ -637,15 +636,25 @@ def _count_potential_hotels(text: str) -> int:
     """Estimates how many hotels are mentioned based on numbering patterns."""
     text = text.lower()
     # Count patterns like "1 готель", "2 вариант", "3)", "4.", etc.
+    # We avoid matching dates like 15.06 by requiring space after dot/parenthesis
     patterns = [
-        r'\d+\s*[)\.]\s+', # 1) or 1.
-        r'\d+\s+(?:готель|отель|варіант|вариант)', # 1 готель
+        r'(?:^|\n|\s)\d+\s*[)\.]\s+', # 1) or 1. at start or after space
+        r'(?:^|\n|\s)\d+\s+(?:готель|отель|варіант|вариант)', # 1 готель
         r'(?:перший|другий|третій|четвертий|п’ятий|шостий|сьомий|восьмий|дев’ятий|десятий)\s+(?:готель|отель|варіант|вариант)'
     ]
     all_matches = set()
     for p in patterns:
         for m in re.finditer(p, text):
-            all_matches.add(m.start())
+            # Only count if not inside a date-like pattern (e.g. 15.06)
+            # Check if there's a number immediately after the space
+            start = m.start()
+            match_str = m.group()
+            # If the pattern is like "15. ", check if next char is a digit
+            if '.' in match_str:
+                after_dot = text[m.end():m.end()+1]
+                if after_dot.isdigit():
+                    continue
+            all_matches.add(start)
     
     count = len(all_matches)
     return count if count > 0 else 1
@@ -653,39 +662,70 @@ def _count_potential_hotels(text: str) -> int:
 def _sort_hotels_by_appearance(hotels: list[str], text: str) -> list[str]:
     """Sorts hotel names based on their first appearance in the text."""
     text_lower = text.lower()
-    # Normalize text for searching (remove punctuation but keep ordinals)
-    text_norm = re.sub(r'[^a-z0-9а-яіїєґ\s]', ' ', text_lower)
-    text_norm = re.sub(r'\s+', ' ', text_norm).strip()
+    
+    # 1. First, find all occurrences of ordinal markers (1, 2, 3... or first, second...)
+    ordinals = []
+    ordinal_patterns = [
+        (r'\b(\d+)\s*[)\.]\s+', 1),
+        (r'\b(\d+)\s+(?:готель|отель|варіант|вариант)', 1),
+        (r'\b(перший)\b', 1), (r'\b(другий)\b', 2), (r'\b(третій)\b', 3),
+        (r'\b(четвертий)\b', 4), (r'\b(п’ятий)\b', 5), (r'\b(шостий)\b', 6),
+        (r'\b(сьомий)\b', 7), (r'\b(восьмий)\b', 8), (r'\b(дев’ятий)\b', 9), (r'\b(десятий)\b', 10)
+    ]
+    
+    found_ordinals = []
+    for pattern, weight in ordinal_patterns:
+        for m in re.finditer(pattern, text_lower):
+            try:
+                val = int(m.group(1)) if m.group(1).isdigit() else weight
+                # If it's a word, weight is already the value
+                if not m.group(1).isdigit():
+                    val = weight
+                found_ordinals.append((m.start(), val))
+            except: pass
+    
+    found_ordinals.sort() # Sort by position in text
 
-    def get_first_pos(h_name: str) -> int:
+    # 2. For each hotel, find its position in text
+    hotel_positions = []
+    for h_name in hotels:
         clean_name = h_name.replace("[NOT_FOUND]", "").strip().lower()
-        # Clean stars/ratings from name for search
         clean_name = re.sub(r'\s*[1-5]\s*(?:\*|★)', ' ', clean_name)
         clean_name = re.sub(r'[^a-z0-9а-яіїєґ\s]', ' ', clean_name)
         clean_name = re.sub(r'\s+', ' ', clean_name).strip()
         
-        if not clean_name: return 999999
-        
-        # 1. Try full name match
-        pos = text_norm.find(clean_name)
-        if pos != -1: return pos
-        
-        # 2. Try unique words match (first unique word that appears)
-        words = [w for w in clean_name.split() if w not in _NOISE_TOKENS and len(w) > 3]
-        if words:
-            positions = []
-            for w in words:
-                p = text_norm.find(w)
-                if p != -1: positions.append(p)
-            if positions: return min(positions)
+        if not clean_name: 
+            hotel_positions.append((999999, h_name))
+            continue
             
-        return 999999
+        # Find all positions of this hotel
+        pos = text_lower.find(clean_name)
+        if pos == -1:
+            # Try unique words
+            words = [w for w in clean_name.split() if w not in _NOISE_TOKENS and len(w) > 3]
+            if words:
+                pos = min([text_lower.find(w) for w in words if text_lower.find(w) != -1] or [999999])
+            else:
+                pos = 999999
+        
+        # 3. Associate hotel with the nearest preceding ordinal
+        best_ordinal = 999
+        for o_pos, o_val in found_ordinals:
+            # If ordinal is close before the hotel name (within 100 chars)
+            if o_pos < pos and (pos - o_pos) < 150:
+                best_ordinal = o_val
+                break
+        
+        # If no ordinal found, use the raw position but deprioritize
+        final_rank = best_ordinal * 1000000 + pos
+        hotel_positions.append((final_rank, h_name))
 
-    # Sort and remove duplicates while preserving first appearance
+    # Sort by rank (ordinal first, then position)
+    hotel_positions.sort()
+    
     seen = set()
-    sorted_hotels = sorted(hotels, key=get_first_pos)
     final = []
-    for h in sorted_hotels:
+    for _, h in hotel_positions:
         if h.lower() not in seen:
             final.append(h)
             seen.add(h.lower())
@@ -1035,8 +1075,12 @@ async def format_tour_message(user_text: str, do_cleanup: bool = False, raw_voic
             elif hotel_stars_list and idx < len(hotel_stars_list):
                 stars_val = _safe_int(hotel_stars_list[idx])
             
-            tax_per_night = get_tax_per_person_per_night(selected_dest or "", stars_val, month, total_people)
-            total_tax_for_stay = tax_per_night * nights * adults
+            tax_info = get_tax_info(selected_dest or "", stars_val, month)
+            if tax_info['per_room']:
+                total_tax_for_stay = tax_info['rate'] * nights
+            else:
+                total_tax_for_stay = tax_info['rate'] * nights * adults
+            
             tax_per_person_share = total_tax_for_stay / total_people if total_people > 0 else 0
             
             # MATH LOGIC FROM APRIL 28TH
