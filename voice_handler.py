@@ -12,7 +12,7 @@ logger = logging.getLogger(__name__)
 
 # --- Voice Specific Settings ---
 # Models for voice transcription cleanup
-VOICE_CLEANUP_MODELS = ["openai/gpt-4o-mini", "google/gemini-flash-1.5"]
+VOICE_CLEANUP_MODELS = ["openai/gpt-5.4-mini", "google/gemini-2.5-flash"]
 
 # Whisper prompt for transcription
 WHISPER_PROMPT = "Майорка, Тенеріфе, BLUESEA, Globales, AzuLine, HSM, BJ Playamar, Iberostar, Rixos, готель, євро, сніданки, дорослих."

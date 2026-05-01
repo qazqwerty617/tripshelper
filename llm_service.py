@@ -751,8 +751,8 @@ async def format_tour_message(user_text: str, do_cleanup: bool = False, raw_voic
 
     selected_dest = _pick_destination_by_keywords(hotel_search_text_cleaned, destinations)
     
-    fast_models = ["openai/gpt-4o-mini", "google/gemini-flash-1.5"]
-    smart_models = ["openai/gpt-4o-mini", "google/gemini-flash-1.5"]
+    fast_models = ["openai/gpt-5.4-mini", "google/gemini-2.5-flash"]
+    smart_models = ["openai/gpt-5.4-mini", "google/gemini-2.5-flash"]
     
     start_time = asyncio.get_event_loop().time()
 
@@ -871,7 +871,7 @@ async def format_tour_message(user_text: str, do_cleanup: bool = False, raw_voic
         
         raw = await _call_llm_with_retry(
             messages=[{"role": "system", "content": _EXTRACT_PROMPT}, {"role": "user", "content": extraction_content}],
-            models=["openai/gpt-4o-mini", "google/gemini-flash-1.5"],
+            models=["openai/gpt-5.4-mini", "google/gemini-2.5-flash"],
             timeout=60, # Increased timeout for larger context
             max_tokens=1500,
             response_format={"type": "json_object"}
