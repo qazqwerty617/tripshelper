@@ -15,7 +15,7 @@ logger = logging.getLogger(__name__)
 VOICE_CLEANUP_MODELS = ["openai/gpt-5.4-mini", "google/gemini-2.5-flash"]
 
 # Whisper prompt for transcription
-WHISPER_PROMPT = "Майорка, Тенеріфе, Коста-Брава, BLUESEA, Globales, AzuLine, HSM, Riu, Barcelo, Iberostar, Meliá, Palladium, Alua, THB, Playamar, готель, євро, сніданки, дорослих."
+WHISPER_PROMPT = "Майорка, Тенеріфе, BLUESEA, Globales, AzuLine, HSM, BJ Playamar, Iberostar, Rixos, готель, євро, сніданки, дорослих."
 
 # Prompt for cleaning up voice transcription
 VOICE_CLEANUP_PROMPT = """Ти — коректор туристичних текстів. Твоє завдання: виправити помилки розпізнавання голосу (особливо в назвах готелів) та чітко структурувати текст. 
@@ -69,15 +69,12 @@ async def transcribe_voice(file_bytes: bytes) -> str:
                     if resp.status_code == 200:
                         text = resp.json().get("text", "")
                         if text:
-                            # ЖОРСТКА АВТОЗАМІНА (працює на 100% без галюцинацій)
+                            # ПРИМУСОВА ЗАМІНА (Надійніше за будь-який промпт)
                             fixes = {
-                                "блюсія": "BLUESEA", "Блюсія": "BLUESEA",
-                                "блю сі": "BLUESEA", "Блю сі": "BLUESEA",
+                                "блюсія": "BLUESEA", "блю сі": "BLUESEA", "Блюсія": "BLUESEA", "Блю сі": "BLUESEA",
                                 "глобаліс": "Globales", "Глобаліс": "Globales",
                                 "плеймар": "Playamar", "Плеймар": "Playamar",
-                                "азулін": "AzuLine", "Азулін": "AzuLine",
-                                "кала мілер": "Cala Millor", "Кала Мілер": "Cala Millor",
-                                "kala miller": "Cala Millor", "Kala Miller": "Cala Millor"
+                                "азулін": "AzuLine", "Азулін": "AzuLine"
                             }
                             for bad, good in fixes.items():
                                 text = text.replace(bad, good)
@@ -103,15 +100,12 @@ async def transcribe_voice(file_bytes: bytes) -> str:
                 if resp.status_code == 200:
                     text = resp.json().get("text", "")
                     if text:
-                        # ЖОРСТКА АВТОЗАМІНА
+                        # ПРИМУСОВА ЗАМІНА
                         fixes = {
-                            "блюсія": "BLUESEA", "Блюсія": "BLUESEA",
-                            "блю сі": "BLUESEA", "Блю сі": "BLUESEA",
+                            "блюсія": "BLUESEA", "блю сі": "BLUESEA", "Блюсія": "BLUESEA", "Блю сі": "BLUESEA",
                             "глобаліс": "Globales", "Глобаліс": "Globales",
                             "плеймар": "Playamar", "Плеймар": "Playamar",
-                            "азулін": "AzuLine", "Азулін": "AzuLine",
-                            "кала мілер": "Cala Millor", "Кала Мілер": "Cala Millor",
-                            "kala miller": "Cala Millor", "Kala Miller": "Cala Millor"
+                            "азулін": "AzuLine", "Азулін": "AzuLine"
                         }
                         for bad, good in fixes.items():
                             text = text.replace(bad, good)

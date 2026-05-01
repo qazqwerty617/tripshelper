@@ -127,7 +127,7 @@ async def handle_voice(message: Message):
     await msg.edit_text("✨ Формую підбірку...", parse_mode="HTML")
     try:
         # ✅ ВІДПРАВЛЯЄМО raw_text НАПРЯМУ, прибираючи cleanup_transcribed_text
-        result = await llm_service.format_tour_message(user_text=raw_text, raw_voice_text=raw_text)
+        result = await llm_service.format_tour_message(user_text=raw_text)
     except Exception as e:
         logger.error(f"format_tour_message voice error: {e}")
         await message.answer("❌ Внутрішня помилка під час генерації. Спробуй ще раз.")
